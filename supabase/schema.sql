@@ -213,6 +213,205 @@ create table if not exists public.cost_categories (
   constraint cost_categories_scope_allowed check (scope in ('UNIT', 'OPERATING', 'SALES'))
 );
 
+create table if not exists public.unit_receipts (
+  id uuid primary key default gen_random_uuid(),
+  receipt_number varchar(40) not null unique,
+  receipt_date date not null,
+  seller_id uuid not null references public.sellers(id),
+  status varchar(20) not null default 'DRAFT',
+  decision_at timestamptz,
+  rejection_reason_code varchar(50),
+  rejection_notes text,
+  purchase_account_id uuid references public.accounts(id),
+  purchase_payment_reference varchar(100),
+  purchase_payment_proof_url text,
+  purchase_payment_proof_filename varchar(255),
+  purchase_payment_proof_recorded_at timestamptz,
+  photo_drive_url text,
+  photo_drive_url_type varchar(20),
+  total_purchase_amount numeric(18,2) not null default 0,
+  total_direct_cost numeric(18,2) not null default 0,
+  total_unit_cost numeric(18,2) not null default 0,
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_receipts_status_allowed check (
+    status in ('DRAFT', 'INSPECTION', 'ACCEPTED', 'REJECTED')
+  ),
+  constraint unit_receipts_photo_url_type_allowed check (
+    photo_drive_url_type is null or photo_drive_url_type in ('FOLDER', 'ALBUM', 'PHOTO')
+  ),
+  constraint unit_receipts_amounts_non_negative check (
+    total_purchase_amount >= 0 and total_direct_cost >= 0 and total_unit_cost >= 0
+  ),
+  constraint unit_receipts_accepted_payment_required check (
+    status <> 'ACCEPTED'
+    or (
+      purchase_account_id is not null
+      and purchase_payment_reference is not null
+      and purchase_payment_proof_url is not null
+      and photo_drive_url is not null
+      and total_purchase_amount > 0
+    )
+  ),
+  constraint unit_receipts_rejected_reason_required check (
+    status <> 'REJECTED' or rejection_notes is not null
+  )
+);
+
+create table if not exists public.phone_units (
+  id uuid primary key default gen_random_uuid(),
+  receipt_id uuid references public.unit_receipts(id),
+  stock_code varchar(40) not null unique,
+  stock_status varchar(20) not null default 'DRAFT',
+  brand_id uuid not null references public.brands(id),
+  model_id uuid not null references public.phone_models(id),
+  storage_variant_id uuid references public.storage_variants(id),
+  color_id uuid references public.colors(id),
+  physical_condition_id uuid references public.physical_conditions(id),
+  imei_1 varchar(30) not null,
+  imei_2 varchar(30),
+  serial_number varchar(100),
+  sim_type varchar(20),
+  battery_health integer,
+  cycle_count integer,
+  icloud_status varchar(30),
+  google_account_status varchar(30),
+  find_my_status varchar(30),
+  imei_status varchar(30),
+  mdm_status varchar(30),
+  purchase_price numeric(18,2) not null default 0,
+  purchase_transfer_fee numeric(18,2) not null default 0,
+  total_unit_cost numeric(18,2) not null default 0,
+  current_listing_price numeric(18,2),
+  minimum_price numeric(18,2),
+  minus_notes text,
+  internal_notes text,
+  photo_drive_url text,
+  acquired_at date,
+  sold_at timestamptz,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint phone_units_stock_status_allowed check (
+    stock_status in (
+      'DRAFT',
+      'INSPECTION',
+      'REJECTED',
+      'IN_STOCK',
+      'RESERVED',
+      'SOLD',
+      'RETURNED',
+      'SERVICE',
+      'DAMAGED',
+      'LOST',
+      'WRITTEN_OFF'
+    )
+  ),
+  constraint phone_units_sim_type_allowed check (
+    sim_type is null or sim_type in ('SINGLE', 'DUAL', 'ESIM', 'HYBRID')
+  ),
+  constraint phone_units_battery_health_range check (
+    battery_health is null or (battery_health >= 0 and battery_health <= 100)
+  ),
+  constraint phone_units_cycle_count_non_negative check (
+    cycle_count is null or cycle_count >= 0
+  ),
+  constraint phone_units_amounts_non_negative check (
+    purchase_price >= 0
+    and purchase_transfer_fee >= 0
+    and total_unit_cost >= 0
+    and (current_listing_price is null or current_listing_price >= 0)
+    and (minimum_price is null or minimum_price >= 0)
+  ),
+  constraint phone_units_drive_url_required_when_stock check (
+    stock_status not in ('IN_STOCK', 'RESERVED', 'SOLD')
+    or photo_drive_url is not null
+  ),
+  constraint phone_units_security_status_required_when_stock check (
+    stock_status not in ('IN_STOCK', 'RESERVED', 'SOLD')
+    or (imei_status is not null and (icloud_status is not null or google_account_status is not null))
+  )
+);
+
+create table if not exists public.unit_inspection_results (
+  id uuid primary key default gen_random_uuid(),
+  receipt_id uuid not null references public.unit_receipts(id) on delete cascade,
+  phone_unit_id uuid not null references public.phone_units(id) on delete cascade,
+  inspection_item_id uuid not null references public.inspection_items(id),
+  result_status varchar(30),
+  boolean_value boolean,
+  number_value numeric(18,2),
+  text_value text,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_inspection_results_unique_item unique (phone_unit_id, inspection_item_id),
+  constraint unit_inspection_results_status_allowed check (
+    result_status is null or result_status in ('OK', 'MINOR', 'ISSUE', 'FAILED', 'UNKNOWN', 'NOT_APPLICABLE')
+  )
+);
+
+create table if not exists public.unit_accessories (
+  id uuid primary key default gen_random_uuid(),
+  phone_unit_id uuid not null references public.phone_units(id) on delete cascade,
+  accessory_type_id uuid not null references public.accessory_types(id),
+  is_included boolean not null default true,
+  condition_notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_accessories_unique_type unique (phone_unit_id, accessory_type_id)
+);
+
+create table if not exists public.unit_photos (
+  id uuid primary key default gen_random_uuid(),
+  phone_unit_id uuid not null references public.phone_units(id) on delete cascade,
+  photo_type varchar(30) not null,
+  drive_url text not null,
+  file_name varchar(255),
+  sort_order integer not null default 0,
+  is_primary boolean not null default false,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_photos_photo_type_allowed check (
+    photo_type in (
+      'FRONT',
+      'BACK',
+      'LEFT_FRAME',
+      'RIGHT_FRAME',
+      'SCREEN',
+      'IMEI',
+      'ACCESSORIES',
+      'DEFECT',
+      'PAYMENT_PROOF',
+      'OTHER'
+    )
+  ),
+  constraint unit_photos_drive_url_https check (drive_url ~ '^https://')
+);
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);
@@ -221,6 +420,28 @@ create index if not exists sellers_name_idx on public.sellers(name);
 create index if not exists customers_name_idx on public.customers(name);
 create index if not exists accounts_type_idx on public.accounts(account_type);
 create index if not exists cost_categories_scope_idx on public.cost_categories(scope);
+create index if not exists unit_receipts_receipt_date_idx on public.unit_receipts(receipt_date);
+create index if not exists unit_receipts_seller_id_idx on public.unit_receipts(seller_id);
+create index if not exists unit_receipts_status_idx on public.unit_receipts(status);
+create index if not exists phone_units_stock_status_idx on public.phone_units(stock_status);
+create index if not exists phone_units_brand_model_idx on public.phone_units(brand_id, model_id);
+create index if not exists phone_units_acquired_at_idx on public.phone_units(acquired_at);
+create index if not exists phone_units_total_unit_cost_idx on public.phone_units(total_unit_cost);
+create index if not exists phone_units_current_listing_price_idx on public.phone_units(current_listing_price);
+create index if not exists phone_units_imei_1_idx on public.phone_units(imei_1);
+create index if not exists phone_units_serial_number_idx on public.phone_units(serial_number);
+create index if not exists unit_inspection_results_receipt_id_idx on public.unit_inspection_results(receipt_id);
+create index if not exists unit_inspection_results_phone_unit_id_idx on public.unit_inspection_results(phone_unit_id);
+create index if not exists unit_accessories_phone_unit_id_idx on public.unit_accessories(phone_unit_id);
+create index if not exists unit_photos_phone_unit_id_idx on public.unit_photos(phone_unit_id);
+
+create unique index if not exists phone_units_active_imei_1_unique_idx
+on public.phone_units (imei_1)
+where deleted_at is null and stock_status <> 'REJECTED';
+
+create unique index if not exists unit_photos_primary_unique_idx
+on public.unit_photos (phone_unit_id)
+where is_primary = true and deleted_at is null;
 
 create or replace trigger brands_set_updated_at
 before update on public.brands
@@ -274,6 +495,26 @@ create or replace trigger cost_categories_set_updated_at
 before update on public.cost_categories
 for each row execute function public.set_updated_at();
 
+create or replace trigger unit_receipts_set_updated_at
+before update on public.unit_receipts
+for each row execute function public.set_updated_at();
+
+create or replace trigger phone_units_set_updated_at
+before update on public.phone_units
+for each row execute function public.set_updated_at();
+
+create or replace trigger unit_inspection_results_set_updated_at
+before update on public.unit_inspection_results
+for each row execute function public.set_updated_at();
+
+create or replace trigger unit_accessories_set_updated_at
+before update on public.unit_accessories
+for each row execute function public.set_updated_at();
+
+create or replace trigger unit_photos_set_updated_at
+before update on public.unit_photos
+for each row execute function public.set_updated_at();
+
 alter table public.brands enable row level security;
 alter table public.phone_models enable row level security;
 alter table public.storage_variants enable row level security;
@@ -287,6 +528,11 @@ alter table public.accounts enable row level security;
 alter table public.bank_accounts enable row level security;
 alter table public.sales_channels enable row level security;
 alter table public.cost_categories enable row level security;
+alter table public.unit_receipts enable row level security;
+alter table public.phone_units enable row level security;
+alter table public.unit_inspection_results enable row level security;
+alter table public.unit_accessories enable row level security;
+alter table public.unit_photos enable row level security;
 
 drop policy if exists "Active brands are readable" on public.brands;
 create policy "Active brands are readable" on public.brands for select using (is_active = true);
@@ -326,6 +572,21 @@ create policy "Active sales channels are readable" on public.sales_channels for 
 
 drop policy if exists "Active cost categories are readable" on public.cost_categories;
 create policy "Active cost categories are readable" on public.cost_categories for select using (is_active = true);
+
+drop policy if exists "Unit receipts are readable" on public.unit_receipts;
+create policy "Unit receipts are readable" on public.unit_receipts for select using (deleted_at is null);
+
+drop policy if exists "Phone units are readable" on public.phone_units;
+create policy "Phone units are readable" on public.phone_units for select using (deleted_at is null);
+
+drop policy if exists "Unit inspection results are readable" on public.unit_inspection_results;
+create policy "Unit inspection results are readable" on public.unit_inspection_results for select using (deleted_at is null);
+
+drop policy if exists "Unit accessories are readable" on public.unit_accessories;
+create policy "Unit accessories are readable" on public.unit_accessories for select using (deleted_at is null);
+
+drop policy if exists "Unit photos are readable" on public.unit_photos;
+create policy "Unit photos are readable" on public.unit_photos for select using (deleted_at is null);
 
 insert into public.brands (code, name, sort_order)
 values

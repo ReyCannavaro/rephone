@@ -27,6 +27,56 @@ type BaseMasterUpdate = {
   updated_at?: string;
 };
 
+type BaseTransactionRow = {
+  id: string;
+  notes: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  deleted_at: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+type BaseTransactionInsert = {
+  id?: string;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
+  deleted_at?: string | null;
+  version?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type ReceiptStatus = "DRAFT" | "INSPECTION" | "ACCEPTED" | "REJECTED";
+type StockStatus =
+  | "DRAFT"
+  | "INSPECTION"
+  | "REJECTED"
+  | "IN_STOCK"
+  | "RESERVED"
+  | "SOLD"
+  | "RETURNED"
+  | "SERVICE"
+  | "DAMAGED"
+  | "LOST"
+  | "WRITTEN_OFF";
+type SimType = "SINGLE" | "DUAL" | "ESIM" | "HYBRID";
+type PhotoDriveUrlType = "FOLDER" | "ALBUM" | "PHOTO";
+type InspectionResultStatus = "OK" | "MINOR" | "ISSUE" | "FAILED" | "UNKNOWN" | "NOT_APPLICABLE";
+type UnitPhotoType =
+  | "FRONT"
+  | "BACK"
+  | "LEFT_FRAME"
+  | "RIGHT_FRAME"
+  | "SCREEN"
+  | "IMEI"
+  | "ACCESSORIES"
+  | "DEFECT"
+  | "PAYMENT_PROOF"
+  | "OTHER";
+
 type Table<Row, Insert = Partial<Row>, Update = Partial<Row>> = {
   Row: Row;
   Insert: Insert;
@@ -274,6 +324,164 @@ export type Database = {
           expense_account_id?: string | null;
           inventory_account_id?: string | null;
           sort_order?: number;
+        }
+      >;
+      unit_receipts: Table<
+        BaseTransactionRow & {
+          receipt_number: string;
+          receipt_date: string;
+          seller_id: string;
+          status: ReceiptStatus;
+          decision_at: string | null;
+          rejection_reason_code: string | null;
+          rejection_notes: string | null;
+          purchase_account_id: string | null;
+          purchase_payment_reference: string | null;
+          purchase_payment_proof_url: string | null;
+          purchase_payment_proof_filename: string | null;
+          purchase_payment_proof_recorded_at: string | null;
+          photo_drive_url: string | null;
+          photo_drive_url_type: PhotoDriveUrlType | null;
+          total_purchase_amount: number;
+          total_direct_cost: number;
+          total_unit_cost: number;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          receipt_number: string;
+          receipt_date: string;
+          seller_id: string;
+          status?: ReceiptStatus;
+          decision_at?: string | null;
+          rejection_reason_code?: string | null;
+          rejection_notes?: string | null;
+          purchase_account_id?: string | null;
+          purchase_payment_reference?: string | null;
+          purchase_payment_proof_url?: string | null;
+          purchase_payment_proof_filename?: string | null;
+          purchase_payment_proof_recorded_at?: string | null;
+          photo_drive_url?: string | null;
+          photo_drive_url_type?: PhotoDriveUrlType | null;
+          total_purchase_amount?: number;
+          total_direct_cost?: number;
+          total_unit_cost?: number;
+          journal_entry_id?: string | null;
+        }
+      >;
+      phone_units: Table<
+        BaseTransactionRow & {
+          receipt_id: string | null;
+          stock_code: string;
+          stock_status: StockStatus;
+          brand_id: string;
+          model_id: string;
+          storage_variant_id: string | null;
+          color_id: string | null;
+          physical_condition_id: string | null;
+          imei_1: string;
+          imei_2: string | null;
+          serial_number: string | null;
+          sim_type: SimType | null;
+          battery_health: number | null;
+          cycle_count: number | null;
+          icloud_status: string | null;
+          google_account_status: string | null;
+          find_my_status: string | null;
+          imei_status: string | null;
+          mdm_status: string | null;
+          purchase_price: number;
+          purchase_transfer_fee: number;
+          total_unit_cost: number;
+          current_listing_price: number | null;
+          minimum_price: number | null;
+          minus_notes: string | null;
+          internal_notes: string | null;
+          photo_drive_url: string | null;
+          acquired_at: string | null;
+          sold_at: string | null;
+        },
+        BaseTransactionInsert & {
+          receipt_id?: string | null;
+          stock_code: string;
+          stock_status?: StockStatus;
+          brand_id: string;
+          model_id: string;
+          storage_variant_id?: string | null;
+          color_id?: string | null;
+          physical_condition_id?: string | null;
+          imei_1: string;
+          imei_2?: string | null;
+          serial_number?: string | null;
+          sim_type?: SimType | null;
+          battery_health?: number | null;
+          cycle_count?: number | null;
+          icloud_status?: string | null;
+          google_account_status?: string | null;
+          find_my_status?: string | null;
+          imei_status?: string | null;
+          mdm_status?: string | null;
+          purchase_price?: number;
+          purchase_transfer_fee?: number;
+          total_unit_cost?: number;
+          current_listing_price?: number | null;
+          minimum_price?: number | null;
+          minus_notes?: string | null;
+          internal_notes?: string | null;
+          photo_drive_url?: string | null;
+          acquired_at?: string | null;
+          sold_at?: string | null;
+        }
+      >;
+      unit_inspection_results: Table<
+        BaseTransactionRow & {
+          receipt_id: string;
+          phone_unit_id: string;
+          inspection_item_id: string;
+          result_status: InspectionResultStatus | null;
+          boolean_value: boolean | null;
+          number_value: number | null;
+          text_value: string | null;
+        },
+        BaseTransactionInsert & {
+          receipt_id: string;
+          phone_unit_id: string;
+          inspection_item_id: string;
+          result_status?: InspectionResultStatus | null;
+          boolean_value?: boolean | null;
+          number_value?: number | null;
+          text_value?: string | null;
+        }
+      >;
+      unit_accessories: Table<
+        BaseTransactionRow & {
+          phone_unit_id: string;
+          accessory_type_id: string;
+          is_included: boolean;
+          condition_notes: string | null;
+        },
+        BaseTransactionInsert & {
+          phone_unit_id: string;
+          accessory_type_id: string;
+          is_included?: boolean;
+          condition_notes?: string | null;
+        }
+      >;
+      unit_photos: Table<
+        BaseTransactionRow & {
+          phone_unit_id: string;
+          photo_type: UnitPhotoType;
+          drive_url: string;
+          file_name: string | null;
+          sort_order: number;
+          is_primary: boolean;
+        },
+        BaseTransactionInsert & {
+          phone_unit_id: string;
+          photo_type: UnitPhotoType;
+          drive_url: string;
+          file_name?: string | null;
+          sort_order?: number;
+          is_primary?: boolean;
         }
       >;
     };
