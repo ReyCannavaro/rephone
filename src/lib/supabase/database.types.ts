@@ -495,6 +495,34 @@ export type Database = {
           is_primary?: boolean;
         }
       >;
+      unit_costs: Table<
+        BaseTransactionRow & {
+          cost_number: string;
+          phone_unit_id: string;
+          cost_category_id: string;
+          cost_date: string;
+          description: string;
+          amount: number;
+          payment_account_id: string | null;
+          is_paid: boolean;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          cost_number: string;
+          phone_unit_id: string;
+          cost_category_id: string;
+          cost_date: string;
+          description: string;
+          amount: number;
+          payment_account_id?: string | null;
+          is_paid?: boolean;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
       journal_entries: Table<
         BaseTransactionRow & {
           journal_number: string;

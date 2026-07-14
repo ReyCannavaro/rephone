@@ -412,6 +412,31 @@ create table if not exists public.unit_photos (
   constraint unit_photos_drive_url_https check (drive_url ~ '^https://')
 );
 
+create table if not exists public.unit_costs (
+  id uuid primary key default gen_random_uuid(),
+  cost_number varchar(40) not null unique,
+  phone_unit_id uuid not null references public.phone_units(id),
+  cost_category_id uuid not null references public.cost_categories(id),
+  cost_date date not null,
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  payment_account_id uuid references public.accounts(id),
+  is_paid boolean not null default true,
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_costs_amount_positive check (amount > 0),
+  constraint unit_costs_paid_account_required check (is_paid = false or payment_account_id is not null),
+  constraint unit_costs_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -494,6 +519,10 @@ create index if not exists unit_inspection_results_receipt_id_idx on public.unit
 create index if not exists unit_inspection_results_phone_unit_id_idx on public.unit_inspection_results(phone_unit_id);
 create index if not exists unit_accessories_phone_unit_id_idx on public.unit_accessories(phone_unit_id);
 create index if not exists unit_photos_phone_unit_id_idx on public.unit_photos(phone_unit_id);
+create index if not exists unit_costs_phone_unit_id_idx on public.unit_costs(phone_unit_id);
+create index if not exists unit_costs_cost_category_id_idx on public.unit_costs(cost_category_id);
+create index if not exists unit_costs_cost_date_idx on public.unit_costs(cost_date);
+create index if not exists unit_costs_payment_account_id_idx on public.unit_costs(payment_account_id);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
@@ -518,6 +547,20 @@ begin
   ) then
     alter table public.unit_receipts
       add constraint unit_receipts_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'unit_costs_journal_entry_id_fkey'
+  ) then
+    alter table public.unit_costs
+      add constraint unit_costs_journal_entry_id_fkey
       foreign key (journal_entry_id) references public.journal_entries(id);
   end if;
 end;
@@ -595,6 +638,10 @@ create or replace trigger unit_photos_set_updated_at
 before update on public.unit_photos
 for each row execute function public.set_updated_at();
 
+create or replace trigger unit_costs_set_updated_at
+before update on public.unit_costs
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -621,6 +668,7 @@ alter table public.phone_units enable row level security;
 alter table public.unit_inspection_results enable row level security;
 alter table public.unit_accessories enable row level security;
 alter table public.unit_photos enable row level security;
+alter table public.unit_costs enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
 
@@ -677,6 +725,9 @@ create policy "Unit accessories are readable" on public.unit_accessories for sel
 
 drop policy if exists "Unit photos are readable" on public.unit_photos;
 create policy "Unit photos are readable" on public.unit_photos for select using (deleted_at is null);
+
+drop policy if exists "Unit costs are readable" on public.unit_costs;
+create policy "Unit costs are readable" on public.unit_costs for select using (deleted_at is null);
 
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
