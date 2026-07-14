@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   ensureReceiptCanMove,
   getOptionalString,
@@ -144,5 +145,76 @@ export async function POST(request: Request, context: RouteContextWithId) {
     return apiError("UNIT_ACCEPT_FAILED", unitUpdate.error.message, 500);
   }
 
-  return apiOk(receiptUpdate.data);
+  const existingJournal = await supabase
+    .from("journal_entries")
+    .select("id")
+    .eq("source_module", "RECEIPT")
+    .eq("source_id", id)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (existingJournal.error) {
+    return apiError("JOURNAL_LOOKUP_FAILED", existingJournal.error.message, 500);
+  }
+
+  if (existingJournal.data) {
+    return apiOk({ ...receiptUpdate.data, journal_entry_id: existingJournal.data.id });
+  }
+
+  const inventoryAccount = await getAccountIdByCode(supabase, "1201");
+
+  if (inventoryAccount.error) {
+    return apiError("INVENTORY_ACCOUNT_NOT_FOUND", inventoryAccount.error, 500);
+  }
+
+  if (!inventoryAccount.data) {
+    return apiError("INVENTORY_ACCOUNT_NOT_FOUND", "Account 1201 is not configured.", 500);
+  }
+
+  const inventoryAccountId = inventoryAccount.data;
+
+  const journal = await createPostedJournal(supabase, {
+    transaction_date: receiptUpdate.data.receipt_date,
+    source_module: "RECEIPT",
+    source_id: id,
+    description: `Penerimaan unit ${receiptUpdate.data.receipt_number}`,
+    lines: [
+      ...detail.units.map((unit) => ({
+        account_id: inventoryAccountId,
+        description: `Persediaan ${unit.stock_code}`,
+        debit: unit.total_unit_cost,
+        credit: 0,
+        phone_unit_id: unit.id,
+        seller_id: detail.receipt.seller_id,
+      })),
+      {
+        account_id: receiptAccountId,
+        description: `Pembayaran pembelian ${receiptUpdate.data.receipt_number}`,
+        debit: 0,
+        credit: totalUnitCost,
+        seller_id: detail.receipt.seller_id,
+      },
+    ],
+  });
+
+  if (journal.error) {
+    return apiError("JOURNAL_CREATE_FAILED", journal.error, 500);
+  }
+
+  if (!journal.data) {
+    return apiError("JOURNAL_CREATE_FAILED", "Journal was not created.", 500);
+  }
+
+  const linkedReceipt = await supabase
+    .from("unit_receipts")
+    .update({ journal_entry_id: journal.data.id, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select()
+    .single();
+
+  if (linkedReceipt.error) {
+    return apiError("JOURNAL_LINK_FAILED", linkedReceipt.error.message, 500);
+  }
+
+  return apiOk(linkedReceipt.data);
 }

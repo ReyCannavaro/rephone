@@ -76,6 +76,17 @@ type UnitPhotoType =
   | "DEFECT"
   | "PAYMENT_PROOF"
   | "OTHER";
+type JournalStatus = "DRAFT" | "POSTED" | "REVERSED";
+type JournalSourceModule =
+  | "RECEIPT"
+  | "UNIT_COST"
+  | "SALE"
+  | "SALE_RETURN"
+  | "CAPITAL"
+  | "OWNER_DRAWING"
+  | "OPERATING_EXPENSE"
+  | "CASH_ADJUSTMENT"
+  | "MANUAL";
 
 type Table<Row, Insert = Partial<Row>, Update = Partial<Row>> = {
   Row: Row;
@@ -482,6 +493,54 @@ export type Database = {
           file_name?: string | null;
           sort_order?: number;
           is_primary?: boolean;
+        }
+      >;
+      journal_entries: Table<
+        BaseTransactionRow & {
+          journal_number: string;
+          transaction_date: string;
+          source_module: JournalSourceModule;
+          source_id: string;
+          description: string;
+          status: JournalStatus;
+          total_debit: number;
+          total_credit: number;
+          posted_at: string | null;
+          reversed_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          journal_number: string;
+          transaction_date: string;
+          source_module: JournalSourceModule;
+          source_id: string;
+          description: string;
+          status?: JournalStatus;
+          total_debit?: number;
+          total_credit?: number;
+          posted_at?: string | null;
+          reversed_entry_id?: string | null;
+        }
+      >;
+      journal_lines: Table<
+        BaseTransactionRow & {
+          journal_entry_id: string;
+          account_id: string;
+          description: string | null;
+          debit: number;
+          credit: number;
+          phone_unit_id: string | null;
+          seller_id: string | null;
+          customer_id: string | null;
+        },
+        BaseTransactionInsert & {
+          journal_entry_id: string;
+          account_id: string;
+          description?: string | null;
+          debit?: number;
+          credit?: number;
+          phone_unit_id?: string | null;
+          seller_id?: string | null;
+          customer_id?: string | null;
         }
       >;
     };

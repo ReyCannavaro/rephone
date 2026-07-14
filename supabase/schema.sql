@@ -412,6 +412,66 @@ create table if not exists public.unit_photos (
   constraint unit_photos_drive_url_https check (drive_url ~ '^https://')
 );
 
+create table if not exists public.journal_entries (
+  id uuid primary key default gen_random_uuid(),
+  journal_number varchar(40) not null unique,
+  transaction_date date not null,
+  source_module varchar(30) not null,
+  source_id uuid not null,
+  description varchar(255) not null,
+  status varchar(20) not null default 'POSTED',
+  total_debit numeric(18,2) not null default 0,
+  total_credit numeric(18,2) not null default 0,
+  posted_at timestamptz,
+  reversed_entry_id uuid references public.journal_entries(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint journal_entries_status_allowed check (status in ('DRAFT', 'POSTED', 'REVERSED')),
+  constraint journal_entries_source_module_allowed check (
+    source_module in (
+      'RECEIPT',
+      'UNIT_COST',
+      'SALE',
+      'SALE_RETURN',
+      'CAPITAL',
+      'OWNER_DRAWING',
+      'OPERATING_EXPENSE',
+      'CASH_ADJUSTMENT',
+      'MANUAL'
+    )
+  ),
+  constraint journal_entries_totals_non_negative check (total_debit >= 0 and total_credit >= 0),
+  constraint journal_entries_balanced check (total_debit = total_credit)
+);
+
+create table if not exists public.journal_lines (
+  id uuid primary key default gen_random_uuid(),
+  journal_entry_id uuid not null references public.journal_entries(id) on delete cascade,
+  account_id uuid not null references public.accounts(id),
+  description varchar(255),
+  debit numeric(18,2) not null default 0,
+  credit numeric(18,2) not null default 0,
+  phone_unit_id uuid references public.phone_units(id),
+  seller_id uuid references public.sellers(id),
+  customer_id uuid references public.customers(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint journal_lines_amounts_non_negative check (debit >= 0 and credit >= 0),
+  constraint journal_lines_debit_credit_exclusive check (
+    (debit > 0 and credit = 0) or (credit > 0 and debit = 0)
+  )
+);
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);
@@ -434,6 +494,12 @@ create index if not exists unit_inspection_results_receipt_id_idx on public.unit
 create index if not exists unit_inspection_results_phone_unit_id_idx on public.unit_inspection_results(phone_unit_id);
 create index if not exists unit_accessories_phone_unit_id_idx on public.unit_accessories(phone_unit_id);
 create index if not exists unit_photos_phone_unit_id_idx on public.unit_photos(phone_unit_id);
+create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
+create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
+create index if not exists journal_entries_status_idx on public.journal_entries(status);
+create index if not exists journal_lines_journal_entry_id_idx on public.journal_lines(journal_entry_id);
+create index if not exists journal_lines_account_id_idx on public.journal_lines(account_id);
+create index if not exists journal_lines_phone_unit_id_idx on public.journal_lines(phone_unit_id);
 
 create unique index if not exists phone_units_active_imei_1_unique_idx
 on public.phone_units (imei_1)
@@ -442,6 +508,20 @@ where deleted_at is null and stock_status <> 'REJECTED';
 create unique index if not exists unit_photos_primary_unique_idx
 on public.unit_photos (phone_unit_id)
 where is_primary = true and deleted_at is null;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'unit_receipts_journal_entry_id_fkey'
+  ) then
+    alter table public.unit_receipts
+      add constraint unit_receipts_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
 
 create or replace trigger brands_set_updated_at
 before update on public.brands
@@ -515,6 +595,14 @@ create or replace trigger unit_photos_set_updated_at
 before update on public.unit_photos
 for each row execute function public.set_updated_at();
 
+create or replace trigger journal_entries_set_updated_at
+before update on public.journal_entries
+for each row execute function public.set_updated_at();
+
+create or replace trigger journal_lines_set_updated_at
+before update on public.journal_lines
+for each row execute function public.set_updated_at();
+
 alter table public.brands enable row level security;
 alter table public.phone_models enable row level security;
 alter table public.storage_variants enable row level security;
@@ -533,6 +621,8 @@ alter table public.phone_units enable row level security;
 alter table public.unit_inspection_results enable row level security;
 alter table public.unit_accessories enable row level security;
 alter table public.unit_photos enable row level security;
+alter table public.journal_entries enable row level security;
+alter table public.journal_lines enable row level security;
 
 drop policy if exists "Active brands are readable" on public.brands;
 create policy "Active brands are readable" on public.brands for select using (is_active = true);
@@ -587,6 +677,12 @@ create policy "Unit accessories are readable" on public.unit_accessories for sel
 
 drop policy if exists "Unit photos are readable" on public.unit_photos;
 create policy "Unit photos are readable" on public.unit_photos for select using (deleted_at is null);
+
+drop policy if exists "Journal entries are readable" on public.journal_entries;
+create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
+
+drop policy if exists "Journal lines are readable" on public.journal_lines;
+create policy "Journal lines are readable" on public.journal_lines for select using (deleted_at is null);
 
 insert into public.brands (code, name, sort_order)
 values
