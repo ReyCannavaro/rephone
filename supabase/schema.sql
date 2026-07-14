@@ -437,6 +437,25 @@ create table if not exists public.unit_costs (
   constraint unit_costs_proof_url_https check (proof_url is null or proof_url ~ '^https://')
 );
 
+create table if not exists public.unit_price_histories (
+  id uuid primary key default gen_random_uuid(),
+  phone_unit_id uuid not null references public.phone_units(id),
+  listing_price numeric(18,2) not null,
+  minimum_price numeric(18,2) not null,
+  estimated_profit_at_listing numeric(18,2) not null,
+  estimated_profit_at_minimum numeric(18,2) not null,
+  reason varchar(255),
+  effective_at timestamptz not null default now(),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_price_histories_prices_positive check (listing_price > 0 and minimum_price > 0)
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -523,6 +542,8 @@ create index if not exists unit_costs_phone_unit_id_idx on public.unit_costs(pho
 create index if not exists unit_costs_cost_category_id_idx on public.unit_costs(cost_category_id);
 create index if not exists unit_costs_cost_date_idx on public.unit_costs(cost_date);
 create index if not exists unit_costs_payment_account_id_idx on public.unit_costs(payment_account_id);
+create index if not exists unit_price_histories_phone_unit_id_idx on public.unit_price_histories(phone_unit_id);
+create index if not exists unit_price_histories_effective_at_idx on public.unit_price_histories(effective_at);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
@@ -642,6 +663,10 @@ create or replace trigger unit_costs_set_updated_at
 before update on public.unit_costs
 for each row execute function public.set_updated_at();
 
+create or replace trigger unit_price_histories_set_updated_at
+before update on public.unit_price_histories
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -669,6 +694,7 @@ alter table public.unit_inspection_results enable row level security;
 alter table public.unit_accessories enable row level security;
 alter table public.unit_photos enable row level security;
 alter table public.unit_costs enable row level security;
+alter table public.unit_price_histories enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
 
@@ -728,6 +754,9 @@ create policy "Unit photos are readable" on public.unit_photos for select using 
 
 drop policy if exists "Unit costs are readable" on public.unit_costs;
 create policy "Unit costs are readable" on public.unit_costs for select using (deleted_at is null);
+
+drop policy if exists "Unit price histories are readable" on public.unit_price_histories;
+create policy "Unit price histories are readable" on public.unit_price_histories for select using (deleted_at is null);
 
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);

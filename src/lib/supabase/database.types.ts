@@ -523,6 +523,26 @@ export type Database = {
           journal_entry_id?: string | null;
         }
       >;
+      unit_price_histories: Table<
+        BaseTransactionRow & {
+          phone_unit_id: string;
+          listing_price: number;
+          minimum_price: number;
+          estimated_profit_at_listing: number;
+          estimated_profit_at_minimum: number;
+          reason: string | null;
+          effective_at: string;
+        },
+        BaseTransactionInsert & {
+          phone_unit_id: string;
+          listing_price: number;
+          minimum_price: number;
+          estimated_profit_at_listing: number;
+          estimated_profit_at_minimum: number;
+          reason?: string | null;
+          effective_at?: string;
+        }
+      >;
       journal_entries: Table<
         BaseTransactionRow & {
           journal_number: string;
