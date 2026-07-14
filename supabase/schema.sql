@@ -456,6 +456,103 @@ create table if not exists public.unit_price_histories (
   constraint unit_price_histories_prices_positive check (listing_price > 0 and minimum_price > 0)
 );
 
+create table if not exists public.sales (
+  id uuid primary key default gen_random_uuid(),
+  sale_number varchar(40) not null unique,
+  sale_date date not null,
+  customer_id uuid not null references public.customers(id),
+  sales_channel_id uuid references public.sales_channels(id),
+  status varchar(20) not null default 'DRAFT',
+  payment_account_id uuid references public.accounts(id),
+  payment_method varchar(20),
+  payment_reference varchar(100),
+  payment_proof_url text,
+  payment_proof_filename varchar(255),
+  payment_proof_recorded_at timestamptz,
+  completed_at timestamptz,
+  subtotal_amount numeric(18,2) not null default 0,
+  total_sales_cost numeric(18,2) not null default 0,
+  total_net_amount numeric(18,2) not null default 0,
+  total_cogs_amount numeric(18,2) not null default 0,
+  total_profit_amount numeric(18,2) not null default 0,
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sales_status_allowed check (
+    status in ('DRAFT', 'COMPLETED', 'CANCELLED', 'RETURNED')
+  ),
+  constraint sales_payment_method_allowed check (
+    payment_method is null or payment_method in ('CASH', 'TRANSFER', 'MARKETPLACE', 'OTHER')
+  ),
+  constraint sales_amounts_non_negative check (
+    subtotal_amount >= 0
+    and total_sales_cost >= 0
+    and total_net_amount >= 0
+    and total_cogs_amount >= 0
+  ),
+  constraint sales_completed_payment_required check (
+    status <> 'COMPLETED'
+    or (
+      payment_account_id is not null
+      and payment_reference is not null
+      and payment_proof_url is not null
+      and subtotal_amount > 0
+      and completed_at is not null
+    )
+  ),
+  constraint sales_payment_proof_url_https check (
+    payment_proof_url is null or payment_proof_url ~ '^https://'
+  )
+);
+
+create table if not exists public.sale_items (
+  id uuid primary key default gen_random_uuid(),
+  sale_id uuid not null references public.sales(id) on delete cascade,
+  phone_unit_id uuid not null references public.phone_units(id),
+  listing_price numeric(18,2),
+  minimum_price numeric(18,2),
+  final_price numeric(18,2) not null,
+  unit_cost numeric(18,2) not null,
+  sales_cost_amount numeric(18,2) not null default 0,
+  net_amount numeric(18,2) not null,
+  profit_amount numeric(18,2) not null,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_items_amounts_valid check (
+    final_price > 0
+    and unit_cost >= 0
+    and sales_cost_amount >= 0
+  )
+);
+
+create table if not exists public.sale_costs (
+  id uuid primary key default gen_random_uuid(),
+  sale_id uuid not null references public.sales(id) on delete cascade,
+  sale_item_id uuid references public.sale_items(id) on delete cascade,
+  cost_category_id uuid not null references public.cost_categories(id),
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  payment_account_id uuid references public.accounts(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_costs_amount_positive check (amount > 0)
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -544,6 +641,18 @@ create index if not exists unit_costs_cost_date_idx on public.unit_costs(cost_da
 create index if not exists unit_costs_payment_account_id_idx on public.unit_costs(payment_account_id);
 create index if not exists unit_price_histories_phone_unit_id_idx on public.unit_price_histories(phone_unit_id);
 create index if not exists unit_price_histories_effective_at_idx on public.unit_price_histories(effective_at);
+create index if not exists sales_sale_date_idx on public.sales(sale_date);
+create index if not exists sales_customer_id_idx on public.sales(customer_id);
+create index if not exists sales_sales_channel_id_idx on public.sales(sales_channel_id);
+create index if not exists sales_status_idx on public.sales(status);
+create index if not exists sale_items_sale_id_idx on public.sale_items(sale_id);
+create index if not exists sale_items_phone_unit_id_idx on public.sale_items(phone_unit_id);
+create unique index if not exists sale_items_active_phone_unit_unique_idx
+on public.sale_items(phone_unit_id)
+where deleted_at is null;
+create index if not exists sale_costs_sale_id_idx on public.sale_costs(sale_id);
+create index if not exists sale_costs_sale_item_id_idx on public.sale_costs(sale_item_id);
+create index if not exists sale_costs_cost_category_id_idx on public.sale_costs(cost_category_id);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
@@ -582,6 +691,20 @@ begin
   ) then
     alter table public.unit_costs
       add constraint unit_costs_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sales_journal_entry_id_fkey'
+  ) then
+    alter table public.sales
+      add constraint sales_journal_entry_id_fkey
       foreign key (journal_entry_id) references public.journal_entries(id);
   end if;
 end;
@@ -667,6 +790,18 @@ create or replace trigger unit_price_histories_set_updated_at
 before update on public.unit_price_histories
 for each row execute function public.set_updated_at();
 
+create or replace trigger sales_set_updated_at
+before update on public.sales
+for each row execute function public.set_updated_at();
+
+create or replace trigger sale_items_set_updated_at
+before update on public.sale_items
+for each row execute function public.set_updated_at();
+
+create or replace trigger sale_costs_set_updated_at
+before update on public.sale_costs
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -695,6 +830,9 @@ alter table public.unit_accessories enable row level security;
 alter table public.unit_photos enable row level security;
 alter table public.unit_costs enable row level security;
 alter table public.unit_price_histories enable row level security;
+alter table public.sales enable row level security;
+alter table public.sale_items enable row level security;
+alter table public.sale_costs enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
 
@@ -757,6 +895,15 @@ create policy "Unit costs are readable" on public.unit_costs for select using (d
 
 drop policy if exists "Unit price histories are readable" on public.unit_price_histories;
 create policy "Unit price histories are readable" on public.unit_price_histories for select using (deleted_at is null);
+
+drop policy if exists "Sales are readable" on public.sales;
+create policy "Sales are readable" on public.sales for select using (deleted_at is null);
+
+drop policy if exists "Sale items are readable" on public.sale_items;
+create policy "Sale items are readable" on public.sale_items for select using (deleted_at is null);
+
+drop policy if exists "Sale costs are readable" on public.sale_costs;
+create policy "Sale costs are readable" on public.sale_costs for select using (deleted_at is null);
 
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
