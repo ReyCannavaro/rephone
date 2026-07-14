@@ -76,6 +76,19 @@ type UnitPhotoType =
   | "DEFECT"
   | "PAYMENT_PROOF"
   | "OTHER";
+type SaleStatus = "DRAFT" | "COMPLETED" | "CANCELLED" | "RETURNED";
+type SalePaymentMethod = "CASH" | "TRANSFER" | "MARKETPLACE" | "OTHER";
+type JournalStatus = "DRAFT" | "POSTED" | "REVERSED";
+type JournalSourceModule =
+  | "RECEIPT"
+  | "UNIT_COST"
+  | "SALE"
+  | "SALE_RETURN"
+  | "CAPITAL"
+  | "OWNER_DRAWING"
+  | "OPERATING_EXPENSE"
+  | "CASH_ADJUSTMENT"
+  | "MANUAL";
 
 type Table<Row, Insert = Partial<Row>, Update = Partial<Row>> = {
   Row: Row;
@@ -482,6 +495,186 @@ export type Database = {
           file_name?: string | null;
           sort_order?: number;
           is_primary?: boolean;
+        }
+      >;
+      unit_costs: Table<
+        BaseTransactionRow & {
+          cost_number: string;
+          phone_unit_id: string;
+          cost_category_id: string;
+          cost_date: string;
+          description: string;
+          amount: number;
+          payment_account_id: string | null;
+          is_paid: boolean;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          cost_number: string;
+          phone_unit_id: string;
+          cost_category_id: string;
+          cost_date: string;
+          description: string;
+          amount: number;
+          payment_account_id?: string | null;
+          is_paid?: boolean;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      unit_price_histories: Table<
+        BaseTransactionRow & {
+          phone_unit_id: string;
+          listing_price: number;
+          minimum_price: number;
+          estimated_profit_at_listing: number;
+          estimated_profit_at_minimum: number;
+          reason: string | null;
+          effective_at: string;
+        },
+        BaseTransactionInsert & {
+          phone_unit_id: string;
+          listing_price: number;
+          minimum_price: number;
+          estimated_profit_at_listing: number;
+          estimated_profit_at_minimum: number;
+          reason?: string | null;
+          effective_at?: string;
+        }
+      >;
+      sales: Table<
+        BaseTransactionRow & {
+          sale_number: string;
+          sale_date: string;
+          customer_id: string;
+          sales_channel_id: string | null;
+          status: SaleStatus;
+          payment_account_id: string | null;
+          payment_method: SalePaymentMethod | null;
+          payment_reference: string | null;
+          payment_proof_url: string | null;
+          payment_proof_filename: string | null;
+          payment_proof_recorded_at: string | null;
+          completed_at: string | null;
+          subtotal_amount: number;
+          total_sales_cost: number;
+          total_net_amount: number;
+          total_cogs_amount: number;
+          total_profit_amount: number;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          sale_number: string;
+          sale_date: string;
+          customer_id: string;
+          sales_channel_id?: string | null;
+          status?: SaleStatus;
+          payment_account_id?: string | null;
+          payment_method?: SalePaymentMethod | null;
+          payment_reference?: string | null;
+          payment_proof_url?: string | null;
+          payment_proof_filename?: string | null;
+          payment_proof_recorded_at?: string | null;
+          completed_at?: string | null;
+          subtotal_amount?: number;
+          total_sales_cost?: number;
+          total_net_amount?: number;
+          total_cogs_amount?: number;
+          total_profit_amount?: number;
+          journal_entry_id?: string | null;
+        }
+      >;
+      sale_items: Table<
+        BaseTransactionRow & {
+          sale_id: string;
+          phone_unit_id: string;
+          listing_price: number | null;
+          minimum_price: number | null;
+          final_price: number;
+          unit_cost: number;
+          sales_cost_amount: number;
+          net_amount: number;
+          profit_amount: number;
+        },
+        BaseTransactionInsert & {
+          sale_id: string;
+          phone_unit_id: string;
+          listing_price?: number | null;
+          minimum_price?: number | null;
+          final_price: number;
+          unit_cost: number;
+          sales_cost_amount?: number;
+          net_amount: number;
+          profit_amount: number;
+        }
+      >;
+      sale_costs: Table<
+        BaseTransactionRow & {
+          sale_id: string;
+          sale_item_id: string | null;
+          cost_category_id: string;
+          description: string;
+          amount: number;
+          payment_account_id: string | null;
+        },
+        BaseTransactionInsert & {
+          sale_id: string;
+          sale_item_id?: string | null;
+          cost_category_id: string;
+          description: string;
+          amount: number;
+          payment_account_id?: string | null;
+        }
+      >;
+      journal_entries: Table<
+        BaseTransactionRow & {
+          journal_number: string;
+          transaction_date: string;
+          source_module: JournalSourceModule;
+          source_id: string;
+          description: string;
+          status: JournalStatus;
+          total_debit: number;
+          total_credit: number;
+          posted_at: string | null;
+          reversed_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          journal_number: string;
+          transaction_date: string;
+          source_module: JournalSourceModule;
+          source_id: string;
+          description: string;
+          status?: JournalStatus;
+          total_debit?: number;
+          total_credit?: number;
+          posted_at?: string | null;
+          reversed_entry_id?: string | null;
+        }
+      >;
+      journal_lines: Table<
+        BaseTransactionRow & {
+          journal_entry_id: string;
+          account_id: string;
+          description: string | null;
+          debit: number;
+          credit: number;
+          phone_unit_id: string | null;
+          seller_id: string | null;
+          customer_id: string | null;
+        },
+        BaseTransactionInsert & {
+          journal_entry_id: string;
+          account_id: string;
+          description?: string | null;
+          debit?: number;
+          credit?: number;
+          phone_unit_id?: string | null;
+          seller_id?: string | null;
+          customer_id?: string | null;
         }
       >;
     };

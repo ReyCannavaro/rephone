@@ -412,6 +412,207 @@ create table if not exists public.unit_photos (
   constraint unit_photos_drive_url_https check (drive_url ~ '^https://')
 );
 
+create table if not exists public.unit_costs (
+  id uuid primary key default gen_random_uuid(),
+  cost_number varchar(40) not null unique,
+  phone_unit_id uuid not null references public.phone_units(id),
+  cost_category_id uuid not null references public.cost_categories(id),
+  cost_date date not null,
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  payment_account_id uuid references public.accounts(id),
+  is_paid boolean not null default true,
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_costs_amount_positive check (amount > 0),
+  constraint unit_costs_paid_account_required check (is_paid = false or payment_account_id is not null),
+  constraint unit_costs_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.unit_price_histories (
+  id uuid primary key default gen_random_uuid(),
+  phone_unit_id uuid not null references public.phone_units(id),
+  listing_price numeric(18,2) not null,
+  minimum_price numeric(18,2) not null,
+  estimated_profit_at_listing numeric(18,2) not null,
+  estimated_profit_at_minimum numeric(18,2) not null,
+  reason varchar(255),
+  effective_at timestamptz not null default now(),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint unit_price_histories_prices_positive check (listing_price > 0 and minimum_price > 0)
+);
+
+create table if not exists public.sales (
+  id uuid primary key default gen_random_uuid(),
+  sale_number varchar(40) not null unique,
+  sale_date date not null,
+  customer_id uuid not null references public.customers(id),
+  sales_channel_id uuid references public.sales_channels(id),
+  status varchar(20) not null default 'DRAFT',
+  payment_account_id uuid references public.accounts(id),
+  payment_method varchar(20),
+  payment_reference varchar(100),
+  payment_proof_url text,
+  payment_proof_filename varchar(255),
+  payment_proof_recorded_at timestamptz,
+  completed_at timestamptz,
+  subtotal_amount numeric(18,2) not null default 0,
+  total_sales_cost numeric(18,2) not null default 0,
+  total_net_amount numeric(18,2) not null default 0,
+  total_cogs_amount numeric(18,2) not null default 0,
+  total_profit_amount numeric(18,2) not null default 0,
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sales_status_allowed check (
+    status in ('DRAFT', 'COMPLETED', 'CANCELLED', 'RETURNED')
+  ),
+  constraint sales_payment_method_allowed check (
+    payment_method is null or payment_method in ('CASH', 'TRANSFER', 'MARKETPLACE', 'OTHER')
+  ),
+  constraint sales_amounts_non_negative check (
+    subtotal_amount >= 0
+    and total_sales_cost >= 0
+    and total_net_amount >= 0
+    and total_cogs_amount >= 0
+  ),
+  constraint sales_completed_payment_required check (
+    status <> 'COMPLETED'
+    or (
+      payment_account_id is not null
+      and payment_reference is not null
+      and payment_proof_url is not null
+      and subtotal_amount > 0
+      and completed_at is not null
+    )
+  ),
+  constraint sales_payment_proof_url_https check (
+    payment_proof_url is null or payment_proof_url ~ '^https://'
+  )
+);
+
+create table if not exists public.sale_items (
+  id uuid primary key default gen_random_uuid(),
+  sale_id uuid not null references public.sales(id) on delete cascade,
+  phone_unit_id uuid not null references public.phone_units(id),
+  listing_price numeric(18,2),
+  minimum_price numeric(18,2),
+  final_price numeric(18,2) not null,
+  unit_cost numeric(18,2) not null,
+  sales_cost_amount numeric(18,2) not null default 0,
+  net_amount numeric(18,2) not null,
+  profit_amount numeric(18,2) not null,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_items_amounts_valid check (
+    final_price > 0
+    and unit_cost >= 0
+    and sales_cost_amount >= 0
+  )
+);
+
+create table if not exists public.sale_costs (
+  id uuid primary key default gen_random_uuid(),
+  sale_id uuid not null references public.sales(id) on delete cascade,
+  sale_item_id uuid references public.sale_items(id) on delete cascade,
+  cost_category_id uuid not null references public.cost_categories(id),
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  payment_account_id uuid references public.accounts(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_costs_amount_positive check (amount > 0)
+);
+
+create table if not exists public.journal_entries (
+  id uuid primary key default gen_random_uuid(),
+  journal_number varchar(40) not null unique,
+  transaction_date date not null,
+  source_module varchar(30) not null,
+  source_id uuid not null,
+  description varchar(255) not null,
+  status varchar(20) not null default 'POSTED',
+  total_debit numeric(18,2) not null default 0,
+  total_credit numeric(18,2) not null default 0,
+  posted_at timestamptz,
+  reversed_entry_id uuid references public.journal_entries(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint journal_entries_status_allowed check (status in ('DRAFT', 'POSTED', 'REVERSED')),
+  constraint journal_entries_source_module_allowed check (
+    source_module in (
+      'RECEIPT',
+      'UNIT_COST',
+      'SALE',
+      'SALE_RETURN',
+      'CAPITAL',
+      'OWNER_DRAWING',
+      'OPERATING_EXPENSE',
+      'CASH_ADJUSTMENT',
+      'MANUAL'
+    )
+  ),
+  constraint journal_entries_totals_non_negative check (total_debit >= 0 and total_credit >= 0),
+  constraint journal_entries_balanced check (total_debit = total_credit)
+);
+
+create table if not exists public.journal_lines (
+  id uuid primary key default gen_random_uuid(),
+  journal_entry_id uuid not null references public.journal_entries(id) on delete cascade,
+  account_id uuid not null references public.accounts(id),
+  description varchar(255),
+  debit numeric(18,2) not null default 0,
+  credit numeric(18,2) not null default 0,
+  phone_unit_id uuid references public.phone_units(id),
+  seller_id uuid references public.sellers(id),
+  customer_id uuid references public.customers(id),
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint journal_lines_amounts_non_negative check (debit >= 0 and credit >= 0),
+  constraint journal_lines_debit_credit_exclusive check (
+    (debit > 0 and credit = 0) or (credit > 0 and debit = 0)
+  )
+);
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);
@@ -434,6 +635,30 @@ create index if not exists unit_inspection_results_receipt_id_idx on public.unit
 create index if not exists unit_inspection_results_phone_unit_id_idx on public.unit_inspection_results(phone_unit_id);
 create index if not exists unit_accessories_phone_unit_id_idx on public.unit_accessories(phone_unit_id);
 create index if not exists unit_photos_phone_unit_id_idx on public.unit_photos(phone_unit_id);
+create index if not exists unit_costs_phone_unit_id_idx on public.unit_costs(phone_unit_id);
+create index if not exists unit_costs_cost_category_id_idx on public.unit_costs(cost_category_id);
+create index if not exists unit_costs_cost_date_idx on public.unit_costs(cost_date);
+create index if not exists unit_costs_payment_account_id_idx on public.unit_costs(payment_account_id);
+create index if not exists unit_price_histories_phone_unit_id_idx on public.unit_price_histories(phone_unit_id);
+create index if not exists unit_price_histories_effective_at_idx on public.unit_price_histories(effective_at);
+create index if not exists sales_sale_date_idx on public.sales(sale_date);
+create index if not exists sales_customer_id_idx on public.sales(customer_id);
+create index if not exists sales_sales_channel_id_idx on public.sales(sales_channel_id);
+create index if not exists sales_status_idx on public.sales(status);
+create index if not exists sale_items_sale_id_idx on public.sale_items(sale_id);
+create index if not exists sale_items_phone_unit_id_idx on public.sale_items(phone_unit_id);
+create unique index if not exists sale_items_active_phone_unit_unique_idx
+on public.sale_items(phone_unit_id)
+where deleted_at is null;
+create index if not exists sale_costs_sale_id_idx on public.sale_costs(sale_id);
+create index if not exists sale_costs_sale_item_id_idx on public.sale_costs(sale_item_id);
+create index if not exists sale_costs_cost_category_id_idx on public.sale_costs(cost_category_id);
+create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
+create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
+create index if not exists journal_entries_status_idx on public.journal_entries(status);
+create index if not exists journal_lines_journal_entry_id_idx on public.journal_lines(journal_entry_id);
+create index if not exists journal_lines_account_id_idx on public.journal_lines(account_id);
+create index if not exists journal_lines_phone_unit_id_idx on public.journal_lines(phone_unit_id);
 
 create unique index if not exists phone_units_active_imei_1_unique_idx
 on public.phone_units (imei_1)
@@ -442,6 +667,48 @@ where deleted_at is null and stock_status <> 'REJECTED';
 create unique index if not exists unit_photos_primary_unique_idx
 on public.unit_photos (phone_unit_id)
 where is_primary = true and deleted_at is null;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'unit_receipts_journal_entry_id_fkey'
+  ) then
+    alter table public.unit_receipts
+      add constraint unit_receipts_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'unit_costs_journal_entry_id_fkey'
+  ) then
+    alter table public.unit_costs
+      add constraint unit_costs_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sales_journal_entry_id_fkey'
+  ) then
+    alter table public.sales
+      add constraint sales_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
 
 create or replace trigger brands_set_updated_at
 before update on public.brands
@@ -515,6 +782,34 @@ create or replace trigger unit_photos_set_updated_at
 before update on public.unit_photos
 for each row execute function public.set_updated_at();
 
+create or replace trigger unit_costs_set_updated_at
+before update on public.unit_costs
+for each row execute function public.set_updated_at();
+
+create or replace trigger unit_price_histories_set_updated_at
+before update on public.unit_price_histories
+for each row execute function public.set_updated_at();
+
+create or replace trigger sales_set_updated_at
+before update on public.sales
+for each row execute function public.set_updated_at();
+
+create or replace trigger sale_items_set_updated_at
+before update on public.sale_items
+for each row execute function public.set_updated_at();
+
+create or replace trigger sale_costs_set_updated_at
+before update on public.sale_costs
+for each row execute function public.set_updated_at();
+
+create or replace trigger journal_entries_set_updated_at
+before update on public.journal_entries
+for each row execute function public.set_updated_at();
+
+create or replace trigger journal_lines_set_updated_at
+before update on public.journal_lines
+for each row execute function public.set_updated_at();
+
 alter table public.brands enable row level security;
 alter table public.phone_models enable row level security;
 alter table public.storage_variants enable row level security;
@@ -533,6 +828,13 @@ alter table public.phone_units enable row level security;
 alter table public.unit_inspection_results enable row level security;
 alter table public.unit_accessories enable row level security;
 alter table public.unit_photos enable row level security;
+alter table public.unit_costs enable row level security;
+alter table public.unit_price_histories enable row level security;
+alter table public.sales enable row level security;
+alter table public.sale_items enable row level security;
+alter table public.sale_costs enable row level security;
+alter table public.journal_entries enable row level security;
+alter table public.journal_lines enable row level security;
 
 drop policy if exists "Active brands are readable" on public.brands;
 create policy "Active brands are readable" on public.brands for select using (is_active = true);
@@ -587,6 +889,27 @@ create policy "Unit accessories are readable" on public.unit_accessories for sel
 
 drop policy if exists "Unit photos are readable" on public.unit_photos;
 create policy "Unit photos are readable" on public.unit_photos for select using (deleted_at is null);
+
+drop policy if exists "Unit costs are readable" on public.unit_costs;
+create policy "Unit costs are readable" on public.unit_costs for select using (deleted_at is null);
+
+drop policy if exists "Unit price histories are readable" on public.unit_price_histories;
+create policy "Unit price histories are readable" on public.unit_price_histories for select using (deleted_at is null);
+
+drop policy if exists "Sales are readable" on public.sales;
+create policy "Sales are readable" on public.sales for select using (deleted_at is null);
+
+drop policy if exists "Sale items are readable" on public.sale_items;
+create policy "Sale items are readable" on public.sale_items for select using (deleted_at is null);
+
+drop policy if exists "Sale costs are readable" on public.sale_costs;
+create policy "Sale costs are readable" on public.sale_costs for select using (deleted_at is null);
+
+drop policy if exists "Journal entries are readable" on public.journal_entries;
+create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
+
+drop policy if exists "Journal lines are readable" on public.journal_lines;
+create policy "Journal lines are readable" on public.journal_lines for select using (deleted_at is null);
 
 insert into public.brands (code, name, sort_order)
 values
