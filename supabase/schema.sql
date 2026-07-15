@@ -553,6 +553,142 @@ create table if not exists public.sale_costs (
   constraint sale_costs_amount_positive check (amount > 0)
 );
 
+create table if not exists public.sale_returns (
+  id uuid primary key default gen_random_uuid(),
+  return_number varchar(40) not null unique,
+  sale_id uuid not null references public.sales(id),
+  return_date date not null,
+  status varchar(20) not null default 'COMPLETED',
+  target_stock_status varchar(20) not null,
+  return_reason_code varchar(50),
+  return_notes text,
+  refund_amount numeric(18,2) not null default 0,
+  refund_account_id uuid references public.accounts(id),
+  refund_reference varchar(100),
+  refund_proof_url text,
+  refund_proof_filename varchar(255),
+  refund_recorded_at timestamptz,
+  reversed_sale_journal_entry_id uuid,
+  journal_entry_id uuid,
+  completed_at timestamptz,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_returns_status_allowed check (
+    status in ('COMPLETED', 'CANCELLED')
+  ),
+  constraint sale_returns_target_stock_status_allowed check (
+    target_stock_status in ('IN_STOCK', 'SERVICE', 'DAMAGED')
+  ),
+  constraint sale_returns_refund_amount_non_negative check (refund_amount >= 0),
+  constraint sale_returns_refund_required_when_amount_positive check (
+    refund_amount = 0
+    or (
+      refund_account_id is not null
+      and refund_reference is not null
+      and refund_proof_url is not null
+    )
+  ),
+  constraint sale_returns_refund_proof_url_https check (
+    refund_proof_url is null or refund_proof_url ~ '^https://'
+  )
+);
+
+create table if not exists public.capital_contributions (
+  id uuid primary key default gen_random_uuid(),
+  contribution_number varchar(40) not null unique,
+  contribution_date date not null,
+  account_id uuid not null references public.accounts(id),
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint capital_contributions_amount_positive check (amount > 0),
+  constraint capital_contributions_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.owner_drawings (
+  id uuid primary key default gen_random_uuid(),
+  drawing_number varchar(40) not null unique,
+  drawing_date date not null,
+  account_id uuid not null references public.accounts(id),
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint owner_drawings_amount_positive check (amount > 0),
+  constraint owner_drawings_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.operating_expenses (
+  id uuid primary key default gen_random_uuid(),
+  expense_number varchar(40) not null unique,
+  expense_date date not null,
+  cost_category_id uuid references public.cost_categories(id),
+  expense_account_id uuid not null references public.accounts(id),
+  payment_account_id uuid not null references public.accounts(id),
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint operating_expenses_amount_positive check (amount > 0),
+  constraint operating_expenses_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.cash_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  adjustment_number varchar(40) not null unique,
+  adjustment_date date not null,
+  account_id uuid not null references public.accounts(id),
+  adjustment_type varchar(20) not null,
+  amount numeric(18,2) not null,
+  reason varchar(255) not null,
+  offset_account_id uuid references public.accounts(id),
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint cash_adjustments_type_allowed check (adjustment_type in ('INCREASE', 'DECREASE')),
+  constraint cash_adjustments_amount_positive check (amount > 0),
+  constraint cash_adjustments_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -613,6 +749,606 @@ create table if not exists public.journal_lines (
   )
 );
 
+create table if not exists public.audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  event_time timestamptz not null default now(),
+  action varchar(30) not null,
+  entity_table varchar(80) not null,
+  entity_id uuid,
+  actor_user_id uuid,
+  actor_email varchar(255),
+  actor_role varchar(50),
+  reason text,
+  old_values jsonb,
+  new_values jsonb,
+  metadata jsonb,
+  request_path text,
+  request_method varchar(10),
+  created_at timestamptz not null default now(),
+  constraint audit_logs_action_allowed check (
+    action in ('CREATE', 'UPDATE', 'ACCEPT', 'REJECT', 'SALE', 'REVERSAL')
+  )
+);
+
+create or replace function public.rpc_create_posted_journal(
+  p_transaction_date date,
+  p_source_module varchar,
+  p_source_id uuid,
+  p_description text,
+  p_lines jsonb,
+  p_reversed_entry_id uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_entry_id uuid;
+  v_total_debit numeric(18,2);
+  v_total_credit numeric(18,2);
+  v_line_count integer;
+begin
+  select
+    count(*),
+    coalesce(round(sum(coalesce((line ->> 'debit')::numeric, 0)), 2), 0),
+    coalesce(round(sum(coalesce((line ->> 'credit')::numeric, 0)), 2), 0)
+  into v_line_count, v_total_debit, v_total_credit
+  from jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) as line;
+
+  if v_line_count < 2 then
+    raise exception 'Journal must have at least two lines.';
+  end if;
+
+  if v_total_debit <> v_total_credit then
+    raise exception 'Journal is not balanced.';
+  end if;
+
+  insert into public.journal_entries (
+    journal_number,
+    transaction_date,
+    source_module,
+    source_id,
+    description,
+    status,
+    total_debit,
+    total_credit,
+    posted_at,
+    reversed_entry_id
+  )
+  values (
+    'JRN-' || left(p_source_module, 8) || '-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISS') || '-' ||
+      lpad(floor(random() * 10000)::text, 4, '0'),
+    p_transaction_date,
+    p_source_module,
+    p_source_id,
+    p_description,
+    'POSTED',
+    v_total_debit,
+    v_total_credit,
+    now(),
+    p_reversed_entry_id
+  )
+  returning id into v_entry_id;
+
+  insert into public.journal_lines (
+    journal_entry_id,
+    account_id,
+    description,
+    debit,
+    credit,
+    phone_unit_id,
+    seller_id,
+    customer_id
+  )
+  select
+    v_entry_id,
+    line.account_id,
+    line.description,
+    coalesce(line.debit, 0),
+    coalesce(line.credit, 0),
+    line.phone_unit_id,
+    line.seller_id,
+    line.customer_id
+  from jsonb_to_recordset(p_lines) as line(
+    account_id uuid,
+    description text,
+    debit numeric,
+    credit numeric,
+    phone_unit_id uuid,
+    seller_id uuid,
+    customer_id uuid
+  );
+
+  return v_entry_id;
+end;
+$$;
+
+create or replace function public.rpc_accept_receipt(
+  p_receipt_id uuid,
+  p_purchase_account_id uuid,
+  p_purchase_payment_reference text,
+  p_purchase_payment_proof_url text,
+  p_purchase_payment_proof_filename text,
+  p_purchase_payment_proof_recorded_at timestamptz,
+  p_photo_drive_url text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_receipt public.unit_receipts%rowtype;
+  v_inventory_account_id uuid;
+  v_journal_id uuid;
+  v_total_purchase numeric(18,2);
+  v_total_direct numeric(18,2);
+  v_total_unit numeric(18,2);
+  v_lines jsonb;
+begin
+  select * into v_receipt
+  from public.unit_receipts
+  where id = p_receipt_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Receipt was not found.';
+  end if;
+
+  if v_receipt.status in ('ACCEPTED', 'REJECTED') then
+    raise exception 'Receipt with status % cannot be accepted.', v_receipt.status;
+  end if;
+
+  select
+    coalesce(sum(purchase_price), 0),
+    coalesce(sum(purchase_transfer_fee), 0),
+    coalesce(sum(total_unit_cost), 0)
+  into v_total_purchase, v_total_direct, v_total_unit
+  from public.phone_units
+  where receipt_id = p_receipt_id and deleted_at is null;
+
+  if v_total_purchase <= 0 then
+    raise exception 'Receipt cannot be accepted without unit purchase amount.';
+  end if;
+
+  update public.unit_receipts
+  set
+    status = 'ACCEPTED',
+    decision_at = now(),
+    purchase_account_id = p_purchase_account_id,
+    purchase_payment_reference = p_purchase_payment_reference,
+    purchase_payment_proof_url = p_purchase_payment_proof_url,
+    purchase_payment_proof_filename = p_purchase_payment_proof_filename,
+    purchase_payment_proof_recorded_at = coalesce(p_purchase_payment_proof_recorded_at, now()),
+    photo_drive_url = p_photo_drive_url,
+    total_purchase_amount = v_total_purchase,
+    total_direct_cost = v_total_direct,
+    total_unit_cost = v_total_unit,
+    updated_at = now()
+  where id = p_receipt_id
+  returning * into v_receipt;
+
+  update public.phone_units
+  set stock_status = 'IN_STOCK', photo_drive_url = p_photo_drive_url, acquired_at = v_receipt.receipt_date, updated_at = now()
+  where receipt_id = p_receipt_id and stock_status in ('DRAFT', 'INSPECTION') and deleted_at is null;
+
+  select id into v_journal_id
+  from public.journal_entries
+  where source_module = 'RECEIPT' and source_id = p_receipt_id and deleted_at is null
+  limit 1;
+
+  if v_journal_id is null then
+    select id into v_inventory_account_id
+    from public.accounts
+    where account_code = '1201' and is_active = true;
+
+    if v_inventory_account_id is null then
+      raise exception 'Inventory account 1201 is not configured.';
+    end if;
+
+    select jsonb_agg(line)
+    into v_lines
+    from (
+      select
+        v_inventory_account_id as account_id,
+        ('Persediaan ' || stock_code) as description,
+        total_unit_cost as debit,
+        0::numeric as credit,
+        id as phone_unit_id,
+        v_receipt.seller_id as seller_id,
+        null::uuid as customer_id
+      from public.phone_units
+      where receipt_id = p_receipt_id and deleted_at is null
+      union all
+      select
+        p_purchase_account_id,
+        ('Pembayaran pembelian ' || v_receipt.receipt_number),
+        0::numeric,
+        v_total_unit,
+        null::uuid,
+        v_receipt.seller_id,
+        null::uuid
+    ) as line;
+
+    v_journal_id := public.rpc_create_posted_journal(
+      v_receipt.receipt_date,
+      'RECEIPT',
+      p_receipt_id,
+      'Penerimaan unit ' || v_receipt.receipt_number,
+      v_lines,
+      null
+    );
+  end if;
+
+  update public.unit_receipts
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = p_receipt_id
+  returning * into v_receipt;
+
+  return jsonb_build_object(
+    'receipt', to_jsonb(v_receipt),
+    'journal_entry_id', v_journal_id
+  );
+end;
+$$;
+
+create or replace function public.rpc_add_unit_cost(
+  p_phone_unit_id uuid,
+  p_cost jsonb,
+  p_inventory_account_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_unit public.phone_units%rowtype;
+  v_cost public.unit_costs%rowtype;
+  v_journal_id uuid;
+  v_amount numeric(18,2);
+begin
+  select * into v_unit
+  from public.phone_units
+  where id = p_phone_unit_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Unit was not found.';
+  end if;
+
+  if v_unit.stock_status in ('SOLD', 'REJECTED', 'LOST', 'WRITTEN_OFF') then
+    raise exception 'Cannot add cost for unit with status %.', v_unit.stock_status;
+  end if;
+
+  v_amount := (p_cost ->> 'amount')::numeric;
+
+  insert into public.unit_costs (
+    cost_number,
+    phone_unit_id,
+    cost_category_id,
+    cost_date,
+    description,
+    amount,
+    payment_account_id,
+    is_paid,
+    proof_url,
+    proof_filename,
+    notes
+  )
+  values (
+    p_cost ->> 'cost_number',
+    p_phone_unit_id,
+    (p_cost ->> 'cost_category_id')::uuid,
+    (p_cost ->> 'cost_date')::date,
+    p_cost ->> 'description',
+    v_amount,
+    (p_cost ->> 'payment_account_id')::uuid,
+    coalesce((p_cost ->> 'is_paid')::boolean, true),
+    p_cost ->> 'proof_url',
+    p_cost ->> 'proof_filename',
+    p_cost ->> 'notes'
+  )
+  returning * into v_cost;
+
+  update public.phone_units
+  set total_unit_cost = round(total_unit_cost + v_amount, 2), updated_at = now()
+  where id = p_phone_unit_id
+  returning * into v_unit;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_cost.cost_date,
+    'UNIT_COST',
+    v_cost.id,
+    'Biaya unit ' || v_unit.stock_code || ': ' || v_cost.description,
+    jsonb_build_array(
+      jsonb_build_object('account_id', p_inventory_account_id, 'description', v_cost.description, 'debit', v_amount, 'credit', 0, 'phone_unit_id', p_phone_unit_id),
+      jsonb_build_object('account_id', v_cost.payment_account_id, 'description', v_cost.description, 'debit', 0, 'credit', v_amount, 'phone_unit_id', p_phone_unit_id)
+    ),
+    null
+  );
+
+  update public.unit_costs
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_cost.id
+  returning * into v_cost;
+
+  return jsonb_build_object(
+    'cost', to_jsonb(v_cost),
+    'unit', jsonb_build_object('id', v_unit.id, 'stock_code', v_unit.stock_code, 'total_unit_cost', v_unit.total_unit_cost),
+    'journal_entry_id', v_journal_id
+  );
+end;
+$$;
+
+create or replace function public.rpc_complete_sale(
+  p_sale_id uuid,
+  p_sale_update jsonb,
+  p_unit_ids uuid[],
+  p_journal_lines jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sale public.sales%rowtype;
+  v_journal_id uuid;
+  v_updated_count integer;
+begin
+  select * into v_sale
+  from public.sales
+  where id = p_sale_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Sale was not found.';
+  end if;
+
+  if v_sale.status = 'COMPLETED' then
+    return jsonb_build_object('sale', to_jsonb(v_sale), 'journal_entry_id', v_sale.journal_entry_id, 'journal_reused', true);
+  end if;
+
+  if v_sale.status <> 'DRAFT' then
+    raise exception 'Sale with status % cannot be completed.', v_sale.status;
+  end if;
+
+  update public.sales
+  set
+    status = 'COMPLETED',
+    payment_account_id = (p_sale_update ->> 'payment_account_id')::uuid,
+    payment_method = p_sale_update ->> 'payment_method',
+    payment_reference = p_sale_update ->> 'payment_reference',
+    payment_proof_url = p_sale_update ->> 'payment_proof_url',
+    payment_proof_filename = p_sale_update ->> 'payment_proof_filename',
+    payment_proof_recorded_at = (p_sale_update ->> 'payment_proof_recorded_at')::timestamptz,
+    completed_at = (p_sale_update ->> 'completed_at')::timestamptz,
+    subtotal_amount = (p_sale_update ->> 'subtotal_amount')::numeric,
+    total_sales_cost = (p_sale_update ->> 'total_sales_cost')::numeric,
+    total_net_amount = (p_sale_update ->> 'total_net_amount')::numeric,
+    total_cogs_amount = (p_sale_update ->> 'total_cogs_amount')::numeric,
+    total_profit_amount = (p_sale_update ->> 'total_profit_amount')::numeric,
+    updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  update public.phone_units
+  set stock_status = 'SOLD', sold_at = v_sale.completed_at, updated_at = now()
+  where id = any(p_unit_ids)
+    and stock_status in ('IN_STOCK', 'RESERVED')
+    and deleted_at is null;
+
+  get diagnostics v_updated_count = row_count;
+
+  if v_updated_count <> cardinality(p_unit_ids) then
+    raise exception 'One or more units could not be marked as SOLD.';
+  end if;
+
+  select id into v_journal_id
+  from public.journal_entries
+  where source_module = 'SALE' and source_id = p_sale_id and deleted_at is null
+  limit 1;
+
+  if v_journal_id is null then
+    v_journal_id := public.rpc_create_posted_journal(
+      v_sale.sale_date,
+      'SALE',
+      p_sale_id,
+      'Penjualan unit ' || v_sale.sale_number,
+      p_journal_lines,
+      null
+    );
+  end if;
+
+  update public.sales
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  return jsonb_build_object('sale', to_jsonb(v_sale), 'journal_entry_id', v_journal_id);
+end;
+$$;
+
+create or replace function public.rpc_return_sale(
+  p_sale_id uuid,
+  p_sale_return jsonb,
+  p_unit_ids uuid[],
+  p_target_stock_status varchar,
+  p_reversal_lines jsonb,
+  p_reversed_journal_entry_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sale public.sales%rowtype;
+  v_return public.sale_returns%rowtype;
+  v_journal_id uuid;
+  v_updated_count integer;
+begin
+  select * into v_sale
+  from public.sales
+  where id = p_sale_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Sale was not found.';
+  end if;
+
+  if v_sale.status <> 'COMPLETED' then
+    raise exception 'Only COMPLETED sales can be returned.';
+  end if;
+
+  insert into public.sale_returns (
+    return_number,
+    sale_id,
+    return_date,
+    status,
+    target_stock_status,
+    return_reason_code,
+    return_notes,
+    refund_amount,
+    refund_account_id,
+    refund_reference,
+    refund_proof_url,
+    refund_proof_filename,
+    refund_recorded_at,
+    reversed_sale_journal_entry_id,
+    completed_at,
+    notes
+  )
+  values (
+    p_sale_return ->> 'return_number',
+    p_sale_id,
+    (p_sale_return ->> 'return_date')::date,
+    'COMPLETED',
+    p_target_stock_status,
+    p_sale_return ->> 'return_reason_code',
+    p_sale_return ->> 'return_notes',
+    coalesce((p_sale_return ->> 'refund_amount')::numeric, 0),
+    nullif(p_sale_return ->> 'refund_account_id', '')::uuid,
+    p_sale_return ->> 'refund_reference',
+    p_sale_return ->> 'refund_proof_url',
+    p_sale_return ->> 'refund_proof_filename',
+    nullif(p_sale_return ->> 'refund_recorded_at', '')::timestamptz,
+    p_reversed_journal_entry_id,
+    (p_sale_return ->> 'completed_at')::timestamptz,
+    p_sale_return ->> 'notes'
+  )
+  returning * into v_return;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_return.return_date,
+    'SALE_RETURN',
+    v_return.id,
+    'Retur penjualan ' || v_sale.sale_number,
+    p_reversal_lines,
+    p_reversed_journal_entry_id
+  );
+
+  update public.sale_returns
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_return.id
+  returning * into v_return;
+
+  update public.phone_units
+  set stock_status = p_target_stock_status, sold_at = null, updated_at = now()
+  where id = any(p_unit_ids)
+    and stock_status = 'SOLD'
+    and deleted_at is null;
+
+  get diagnostics v_updated_count = row_count;
+
+  if v_updated_count <> cardinality(p_unit_ids) then
+    raise exception 'One or more sold units could not be restored.';
+  end if;
+
+  update public.sales
+  set status = 'RETURNED', updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  update public.journal_entries
+  set status = 'REVERSED', updated_at = now()
+  where id = p_reversed_journal_entry_id;
+
+  return jsonb_build_object(
+    'sale', to_jsonb(v_sale),
+    'return', to_jsonb(v_return),
+    'journal_entry_id', v_journal_id,
+    'target_stock_status', p_target_stock_status
+  );
+end;
+$$;
+
+create or replace function public.rpc_create_operating_expense(
+  p_expense jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_expense public.operating_expenses%rowtype;
+  v_journal_id uuid;
+  v_amount numeric(18,2);
+begin
+  v_amount := (p_expense ->> 'amount')::numeric;
+
+  insert into public.operating_expenses (
+    expense_number,
+    expense_date,
+    cost_category_id,
+    expense_account_id,
+    payment_account_id,
+    description,
+    amount,
+    reference,
+    proof_url,
+    proof_filename,
+    notes
+  )
+  values (
+    p_expense ->> 'expense_number',
+    (p_expense ->> 'expense_date')::date,
+    nullif(p_expense ->> 'cost_category_id', '')::uuid,
+    (p_expense ->> 'expense_account_id')::uuid,
+    (p_expense ->> 'payment_account_id')::uuid,
+    p_expense ->> 'description',
+    v_amount,
+    p_expense ->> 'reference',
+    p_expense ->> 'proof_url',
+    p_expense ->> 'proof_filename',
+    p_expense ->> 'notes'
+  )
+  returning * into v_expense;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_expense.expense_date,
+    'OPERATING_EXPENSE',
+    v_expense.id,
+    'Beban operasional ' || v_expense.expense_number || ': ' || v_expense.description,
+    jsonb_build_array(
+      jsonb_build_object('account_id', v_expense.expense_account_id, 'description', v_expense.description, 'debit', v_amount, 'credit', 0),
+      jsonb_build_object('account_id', v_expense.payment_account_id, 'description', 'Pembayaran ' || v_expense.description, 'debit', 0, 'credit', v_amount)
+    ),
+    null
+  );
+
+  update public.operating_expenses
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_expense.id
+  returning * into v_expense;
+
+  return jsonb_build_object('expense', to_jsonb(v_expense), 'journal_entry_id', v_journal_id);
+end;
+$$;
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);
@@ -647,18 +1383,33 @@ create index if not exists sales_sales_channel_id_idx on public.sales(sales_chan
 create index if not exists sales_status_idx on public.sales(status);
 create index if not exists sale_items_sale_id_idx on public.sale_items(sale_id);
 create index if not exists sale_items_phone_unit_id_idx on public.sale_items(phone_unit_id);
-create unique index if not exists sale_items_active_phone_unit_unique_idx
-on public.sale_items(phone_unit_id)
-where deleted_at is null;
+drop index if exists sale_items_active_phone_unit_unique_idx;
 create index if not exists sale_costs_sale_id_idx on public.sale_costs(sale_id);
 create index if not exists sale_costs_sale_item_id_idx on public.sale_costs(sale_item_id);
 create index if not exists sale_costs_cost_category_id_idx on public.sale_costs(cost_category_id);
+create index if not exists sale_returns_sale_id_idx on public.sale_returns(sale_id);
+create index if not exists sale_returns_return_date_idx on public.sale_returns(return_date);
+create index if not exists sale_returns_target_stock_status_idx on public.sale_returns(target_stock_status);
+create index if not exists capital_contributions_date_idx on public.capital_contributions(contribution_date);
+create index if not exists capital_contributions_account_id_idx on public.capital_contributions(account_id);
+create index if not exists owner_drawings_date_idx on public.owner_drawings(drawing_date);
+create index if not exists owner_drawings_account_id_idx on public.owner_drawings(account_id);
+create index if not exists operating_expenses_date_idx on public.operating_expenses(expense_date);
+create index if not exists operating_expenses_payment_account_id_idx on public.operating_expenses(payment_account_id);
+create index if not exists operating_expenses_expense_account_id_idx on public.operating_expenses(expense_account_id);
+create index if not exists cash_adjustments_date_idx on public.cash_adjustments(adjustment_date);
+create index if not exists cash_adjustments_account_id_idx on public.cash_adjustments(account_id);
+create index if not exists cash_adjustments_type_idx on public.cash_adjustments(adjustment_type);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
 create index if not exists journal_lines_journal_entry_id_idx on public.journal_lines(journal_entry_id);
 create index if not exists journal_lines_account_id_idx on public.journal_lines(account_id);
 create index if not exists journal_lines_phone_unit_id_idx on public.journal_lines(phone_unit_id);
+create index if not exists audit_logs_event_time_idx on public.audit_logs(event_time desc);
+create index if not exists audit_logs_action_idx on public.audit_logs(action);
+create index if not exists audit_logs_entity_idx on public.audit_logs(entity_table, entity_id);
+create index if not exists audit_logs_actor_user_id_idx on public.audit_logs(actor_user_id);
 
 create unique index if not exists phone_units_active_imei_1_unique_idx
 on public.phone_units (imei_1)
@@ -705,6 +1456,74 @@ begin
   ) then
     alter table public.sales
       add constraint sales_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sale_returns_reversed_sale_journal_entry_id_fkey'
+  ) then
+    alter table public.sale_returns
+      add constraint sale_returns_reversed_sale_journal_entry_id_fkey
+      foreign key (reversed_sale_journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sale_returns_journal_entry_id_fkey'
+  ) then
+    alter table public.sale_returns
+      add constraint sale_returns_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'capital_contributions_journal_entry_id_fkey'
+  ) then
+    alter table public.capital_contributions
+      add constraint capital_contributions_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'owner_drawings_journal_entry_id_fkey'
+  ) then
+    alter table public.owner_drawings
+      add constraint owner_drawings_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'operating_expenses_journal_entry_id_fkey'
+  ) then
+    alter table public.operating_expenses
+      add constraint operating_expenses_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'cash_adjustments_journal_entry_id_fkey'
+  ) then
+    alter table public.cash_adjustments
+      add constraint cash_adjustments_journal_entry_id_fkey
       foreign key (journal_entry_id) references public.journal_entries(id);
   end if;
 end;
@@ -802,6 +1621,26 @@ create or replace trigger sale_costs_set_updated_at
 before update on public.sale_costs
 for each row execute function public.set_updated_at();
 
+create or replace trigger sale_returns_set_updated_at
+before update on public.sale_returns
+for each row execute function public.set_updated_at();
+
+create or replace trigger capital_contributions_set_updated_at
+before update on public.capital_contributions
+for each row execute function public.set_updated_at();
+
+create or replace trigger owner_drawings_set_updated_at
+before update on public.owner_drawings
+for each row execute function public.set_updated_at();
+
+create or replace trigger operating_expenses_set_updated_at
+before update on public.operating_expenses
+for each row execute function public.set_updated_at();
+
+create or replace trigger cash_adjustments_set_updated_at
+before update on public.cash_adjustments
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -833,8 +1672,14 @@ alter table public.unit_price_histories enable row level security;
 alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
 alter table public.sale_costs enable row level security;
+alter table public.sale_returns enable row level security;
+alter table public.capital_contributions enable row level security;
+alter table public.owner_drawings enable row level security;
+alter table public.operating_expenses enable row level security;
+alter table public.cash_adjustments enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
+alter table public.audit_logs enable row level security;
 
 drop policy if exists "Active brands are readable" on public.brands;
 create policy "Active brands are readable" on public.brands for select using (is_active = true);
@@ -905,11 +1750,33 @@ create policy "Sale items are readable" on public.sale_items for select using (d
 drop policy if exists "Sale costs are readable" on public.sale_costs;
 create policy "Sale costs are readable" on public.sale_costs for select using (deleted_at is null);
 
+drop policy if exists "Sale returns are readable" on public.sale_returns;
+create policy "Sale returns are readable" on public.sale_returns for select using (deleted_at is null);
+
+drop policy if exists "Capital contributions are readable" on public.capital_contributions;
+create policy "Capital contributions are readable" on public.capital_contributions for select using (deleted_at is null);
+
+drop policy if exists "Owner drawings are readable" on public.owner_drawings;
+create policy "Owner drawings are readable" on public.owner_drawings for select using (deleted_at is null);
+
+drop policy if exists "Operating expenses are readable" on public.operating_expenses;
+create policy "Operating expenses are readable" on public.operating_expenses for select using (deleted_at is null);
+
+drop policy if exists "Cash adjustments are readable" on public.cash_adjustments;
+create policy "Cash adjustments are readable" on public.cash_adjustments for select using (deleted_at is null);
+
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
 
 drop policy if exists "Journal lines are readable" on public.journal_lines;
 create policy "Journal lines are readable" on public.journal_lines for select using (deleted_at is null);
+
+drop policy if exists "Audit logs are readable" on public.audit_logs;
+create policy "Audit logs are readable" on public.audit_logs
+for select using (
+  auth.role() = 'authenticated'
+  and upper(coalesce(auth.jwt() -> 'app_metadata' ->> 'role', auth.jwt() -> 'user_metadata' ->> 'role', '')) = 'OWNER'
+);
 
 insert into public.brands (code, name, sort_order)
 values

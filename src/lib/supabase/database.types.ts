@@ -78,7 +78,10 @@ type UnitPhotoType =
   | "OTHER";
 type SaleStatus = "DRAFT" | "COMPLETED" | "CANCELLED" | "RETURNED";
 type SalePaymentMethod = "CASH" | "TRANSFER" | "MARKETPLACE" | "OTHER";
+type SaleReturnStatus = "COMPLETED" | "CANCELLED";
+type SaleReturnTargetStockStatus = "IN_STOCK" | "SERVICE" | "DAMAGED";
 type JournalStatus = "DRAFT" | "POSTED" | "REVERSED";
+type AuditAction = "CREATE" | "UPDATE" | "ACCEPT" | "REJECT" | "SALE" | "REVERSAL";
 type JournalSourceModule =
   | "RECEIPT"
   | "UNIT_COST"
@@ -629,6 +632,144 @@ export type Database = {
           payment_account_id?: string | null;
         }
       >;
+      sale_returns: Table<
+        BaseTransactionRow & {
+          return_number: string;
+          sale_id: string;
+          return_date: string;
+          status: SaleReturnStatus;
+          target_stock_status: SaleReturnTargetStockStatus;
+          return_reason_code: string | null;
+          return_notes: string | null;
+          refund_amount: number;
+          refund_account_id: string | null;
+          refund_reference: string | null;
+          refund_proof_url: string | null;
+          refund_proof_filename: string | null;
+          refund_recorded_at: string | null;
+          reversed_sale_journal_entry_id: string | null;
+          journal_entry_id: string | null;
+          completed_at: string | null;
+        },
+        BaseTransactionInsert & {
+          return_number: string;
+          sale_id: string;
+          return_date: string;
+          status?: SaleReturnStatus;
+          target_stock_status: SaleReturnTargetStockStatus;
+          return_reason_code?: string | null;
+          return_notes?: string | null;
+          refund_amount?: number;
+          refund_account_id?: string | null;
+          refund_reference?: string | null;
+          refund_proof_url?: string | null;
+          refund_proof_filename?: string | null;
+          refund_recorded_at?: string | null;
+          reversed_sale_journal_entry_id?: string | null;
+          journal_entry_id?: string | null;
+          completed_at?: string | null;
+        }
+      >;
+      capital_contributions: Table<
+        BaseTransactionRow & {
+          contribution_number: string;
+          contribution_date: string;
+          account_id: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          contribution_number: string;
+          contribution_date: string;
+          account_id: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      owner_drawings: Table<
+        BaseTransactionRow & {
+          drawing_number: string;
+          drawing_date: string;
+          account_id: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          drawing_number: string;
+          drawing_date: string;
+          account_id: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      operating_expenses: Table<
+        BaseTransactionRow & {
+          expense_number: string;
+          expense_date: string;
+          cost_category_id: string | null;
+          expense_account_id: string;
+          payment_account_id: string;
+          description: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          expense_number: string;
+          expense_date: string;
+          cost_category_id?: string | null;
+          expense_account_id: string;
+          payment_account_id: string;
+          description: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      cash_adjustments: Table<
+        BaseTransactionRow & {
+          adjustment_number: string;
+          adjustment_date: string;
+          account_id: string;
+          adjustment_type: "INCREASE" | "DECREASE";
+          amount: number;
+          reason: string;
+          offset_account_id: string | null;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          adjustment_number: string;
+          adjustment_date: string;
+          account_id: string;
+          adjustment_type: "INCREASE" | "DECREASE";
+          amount: number;
+          reason: string;
+          offset_account_id?: string | null;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
       journal_entries: Table<
         BaseTransactionRow & {
           journal_number: string;
@@ -677,9 +818,92 @@ export type Database = {
           customer_id?: string | null;
         }
       >;
+      audit_logs: Table<
+        {
+          id: string;
+          event_time: string;
+          action: AuditAction;
+          entity_table: string;
+          entity_id: string | null;
+          actor_user_id: string | null;
+          actor_email: string | null;
+          actor_role: string | null;
+          reason: string | null;
+          old_values: Json | null;
+          new_values: Json | null;
+          metadata: Json | null;
+          request_path: string | null;
+          request_method: string | null;
+          created_at: string;
+        },
+        {
+          id?: string;
+          event_time?: string;
+          action: AuditAction;
+          entity_table: string;
+          entity_id?: string | null;
+          actor_user_id?: string | null;
+          actor_email?: string | null;
+          actor_role?: string | null;
+          reason?: string | null;
+          old_values?: Json | null;
+          new_values?: Json | null;
+          metadata?: Json | null;
+          request_path?: string | null;
+          request_method?: string | null;
+          created_at?: string;
+        }
+      >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      rpc_accept_receipt: {
+        Args: {
+          p_receipt_id: string;
+          p_purchase_account_id: string;
+          p_purchase_payment_reference: string;
+          p_purchase_payment_proof_url: string;
+          p_purchase_payment_proof_filename: string | null;
+          p_purchase_payment_proof_recorded_at: string | null;
+          p_photo_drive_url: string;
+        };
+        Returns: Json;
+      };
+      rpc_add_unit_cost: {
+        Args: {
+          p_phone_unit_id: string;
+          p_cost: Json;
+          p_inventory_account_id: string;
+        };
+        Returns: Json;
+      };
+      rpc_complete_sale: {
+        Args: {
+          p_sale_id: string;
+          p_sale_update: Json;
+          p_unit_ids: string[];
+          p_journal_lines: Json;
+        };
+        Returns: Json;
+      };
+      rpc_return_sale: {
+        Args: {
+          p_sale_id: string;
+          p_sale_return: Json;
+          p_unit_ids: string[];
+          p_target_stock_status: string;
+          p_reversal_lines: Json;
+          p_reversed_journal_entry_id: string;
+        };
+        Returns: Json;
+      };
+      rpc_create_operating_expense: {
+        Args: {
+          p_expense: Json;
+        };
+        Returns: Json;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };

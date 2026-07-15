@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureReceiptCanMove,
   getOptionalString,
@@ -30,6 +31,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
     return movable.error;
   }
 
+  const detail = movable.data;
   const now = new Date().toISOString();
   const receiptUpdate = await supabase
     .from("unit_receipts")
@@ -57,6 +59,20 @@ export async function POST(request: Request, context: RouteContextWithId) {
   if (unitUpdate.error) {
     return apiError("UNIT_REJECT_FAILED", unitUpdate.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "REJECT",
+    entity_table: "unit_receipts",
+    entity_id: id,
+    reason: rejectionNotes,
+    old_values: detail.receipt,
+    new_values: receiptUpdate.data,
+    metadata: {
+      rejection_reason_code: getOptionalString(parsed.data.rejection_reason_code),
+      phone_unit_ids: detail.units.map((unit) => unit.id),
+    },
+  });
 
   return apiOk(receiptUpdate.data);
 }

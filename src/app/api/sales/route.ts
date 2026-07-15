@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   getDateString,
   getNumber,
@@ -131,6 +132,40 @@ export async function POST(request: Request) {
       409,
       { stock_status: unit.stock_status },
     );
+  }
+
+  const activeSaleItemsResult = await supabase
+    .from("sale_items")
+    .select("sale_id")
+    .eq("phone_unit_id", phoneUnitId)
+    .is("deleted_at", null);
+
+  if (activeSaleItemsResult.error) {
+    return apiError("ACTIVE_SALE_LOOKUP_FAILED", activeSaleItemsResult.error.message, 500);
+  }
+
+  const activeSaleIds = [...new Set((activeSaleItemsResult.data ?? []).map((item) => item.sale_id))];
+
+  if (activeSaleIds.length > 0) {
+    const activeSalesResult = await supabase
+      .from("sales")
+      .select("id, sale_number, status")
+      .in("id", activeSaleIds)
+      .in("status", ["DRAFT", "COMPLETED"])
+      .is("deleted_at", null);
+
+    if (activeSalesResult.error) {
+      return apiError("ACTIVE_SALE_LOOKUP_FAILED", activeSalesResult.error.message, 500);
+    }
+
+    if ((activeSalesResult.data ?? []).length > 0) {
+      return apiError(
+        "UNIT_ALREADY_IN_ACTIVE_SALE",
+        "Unit already belongs to an active draft or completed sale.",
+        409,
+        activeSalesResult.data[0],
+      );
+    }
   }
 
   const costCategoryIds = [...new Set(costs.map((cost) => cost.cost_category_id))];
@@ -269,6 +304,31 @@ export async function POST(request: Request) {
 
     saleCosts = saleCostsResult.data ?? [];
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "sales",
+    entity_id: saleResult.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: {
+      unit: {
+        id: unit.id,
+        stock_code: unit.stock_code,
+        stock_status: unit.stock_status,
+      },
+    },
+    new_values: {
+      sale: saleResult.data,
+      item: saleItemResult.data,
+      costs: saleCosts,
+    },
+    metadata: {
+      phone_unit_id: phoneUnitId,
+      total_net_amount: totals.total_net_amount,
+      total_profit_amount: totals.total_profit_amount,
+    },
+  });
 
   return apiOk(
     {

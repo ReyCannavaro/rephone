@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureReceiptCanMove,
   getInspectionStatus,
@@ -87,6 +88,24 @@ export async function POST(request: Request, context: RouteContextWithId) {
       .eq("receipt_id", id)
       .eq("stock_status", "DRAFT"),
   ]);
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "UPDATE",
+    entity_table: "unit_inspection_results",
+    entity_id: id,
+    reason: getOptionalString(parsed.data.audit_reason) ?? getOptionalString(parsed.data.notes),
+    old_values: {
+      receipt: movable.data.receipt,
+      inspections: movable.data.inspections,
+    },
+    new_values: data,
+    metadata: {
+      receipt_id: id,
+      result_count: data?.length ?? 0,
+      phone_unit_ids: movable.data.units.map((unit) => unit.id),
+    },
+  });
 
   return apiOk(data);
 }

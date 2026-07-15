@@ -1,5 +1,6 @@
 import { apiError, apiOk } from "@/lib/api/responses";
-import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
+import { writeAuditLog } from "@/lib/audit/audit-service";
+import { getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   getOptionalString,
   readJsonObject,
@@ -16,7 +17,6 @@ import type { Database } from "@/lib/supabase/database.types";
 
 export const runtime = "nodejs";
 
-type SaleRow = Database["public"]["Tables"]["sales"]["Row"];
 type SaleItemRow = Database["public"]["Tables"]["sale_items"]["Row"];
 type SaleCostRow = Database["public"]["Tables"]["sale_costs"]["Row"];
 
@@ -198,97 +198,35 @@ export async function POST(request: Request, context: RouteContextWithId) {
   }
 
   const now = new Date().toISOString();
-  const completedSaleResult = await supabase
-    .from("sales")
-    .update({
-      status: "COMPLETED",
-      payment_account_id: resolvedPaymentAccountId,
-      payment_method: paymentMethod ?? sale.payment_method,
-      payment_reference: resolvedPaymentReference,
-      payment_proof_url: resolvedPaymentProofUrl,
-      payment_proof_filename: getOptionalString(body.payment_proof_filename) ?? sale.payment_proof_filename,
-      payment_proof_recorded_at: getOptionalString(body.payment_proof_recorded_at) ?? now,
-      completed_at: now,
-      subtotal_amount: totals.subtotal_amount,
-      total_sales_cost: totals.total_sales_cost,
-      total_net_amount: totals.total_net_amount,
-      total_cogs_amount: totals.total_cogs_amount,
-      total_profit_amount: totals.total_profit_amount,
-      updated_at: now,
-    })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (completedSaleResult.error) {
-    return apiError("SALE_COMPLETE_FAILED", completedSaleResult.error.message, 500);
-  }
-
-  const unitUpdate = await supabase
-    .from("phone_units")
-    .update({
-      stock_status: "SOLD",
-      sold_at: now,
-      updated_at: now,
-    })
-    .in("id", unitIds)
-    .in("stock_status", sellableStockStatuses)
-    .select("id");
-
-  if (unitUpdate.error) {
-    await rollbackSaleToDraft(supabase, id, sale);
-
-    return apiError("SALE_UNIT_STATUS_UPDATE_FAILED", unitUpdate.error.message, 500);
-  }
-
-  if ((unitUpdate.data ?? []).length !== unitIds.length) {
-    await rollbackSaleToDraft(supabase, id, sale);
-    await rollbackUnitsToPreviousStatus(supabase, units);
-
-    return apiError("SALE_UNIT_STATUS_UPDATE_FAILED", "One or more units could not be marked as SOLD.", 409);
-  }
-
-  const existingJournal = await supabase
-    .from("journal_entries")
-    .select("id")
-    .eq("source_module", "SALE")
-    .eq("source_id", id)
-    .is("deleted_at", null)
-    .maybeSingle();
-
-  if (existingJournal.error) {
-    return apiError("SALE_JOURNAL_LOOKUP_FAILED", existingJournal.error.message, 500);
-  }
-
-  if (existingJournal.data) {
-    const linkedSale = await supabase
-      .from("sales")
-      .update({ journal_entry_id: existingJournal.data.id, updated_at: new Date().toISOString() })
-      .eq("id", id)
-      .select()
-      .single();
-
-    if (linkedSale.error) {
-      return apiError("SALE_JOURNAL_LINK_FAILED", linkedSale.error.message, 500);
-    }
-
-    return apiOk({ sale: linkedSale.data, journal_entry_id: existingJournal.data.id });
-  }
+  const saleUpdatePayload = {
+    payment_account_id: resolvedPaymentAccountId,
+    payment_method: paymentMethod ?? sale.payment_method ?? null,
+    payment_reference: resolvedPaymentReference,
+    payment_proof_url: resolvedPaymentProofUrl,
+    payment_proof_filename: getOptionalString(body.payment_proof_filename) ?? sale.payment_proof_filename,
+    payment_proof_recorded_at: getOptionalString(body.payment_proof_recorded_at) ?? now,
+    completed_at: now,
+    subtotal_amount: totals.subtotal_amount,
+    total_sales_cost: totals.total_sales_cost,
+    total_net_amount: totals.total_net_amount,
+    total_cogs_amount: totals.total_cogs_amount,
+    total_profit_amount: totals.total_profit_amount,
+  };
 
   const journalLines = [
     {
       account_id: resolvedPaymentAccountId,
-      description: `Penerimaan penjualan ${completedSaleResult.data.sale_number}`,
+      description: `Penerimaan penjualan ${sale.sale_number}`,
       debit: totals.subtotal_amount,
       credit: 0,
-      customer_id: completedSaleResult.data.customer_id,
+      customer_id: sale.customer_id,
     },
     {
       account_id: revenueAccount.data,
-      description: `Pendapatan penjualan ${completedSaleResult.data.sale_number}`,
+      description: `Pendapatan penjualan ${sale.sale_number}`,
       debit: 0,
       credit: totals.subtotal_amount,
-      customer_id: completedSaleResult.data.customer_id,
+      customer_id: sale.customer_id,
     },
     ...saleItems.map((item) => ({
       account_id: cogsAccount.data,
@@ -296,7 +234,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
       debit: item.unit_cost,
       credit: 0,
       phone_unit_id: item.phone_unit_id,
-      customer_id: completedSaleResult.data.customer_id,
+      customer_id: sale.customer_id,
     })),
     ...saleItems.map((item) => ({
       account_id: inventoryAccount.data,
@@ -304,7 +242,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
       debit: 0,
       credit: item.unit_cost,
       phone_unit_id: item.phone_unit_id,
-      customer_id: completedSaleResult.data.customer_id,
+      customer_id: sale.customer_id,
     })),
     ...saleCosts.map((cost) => {
       const category = costCategories.data.get(cost.cost_category_id);
@@ -315,7 +253,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
         debit: cost.amount,
         credit: 0,
         phone_unit_id: findCostPhoneUnitId(saleItems, cost),
-        customer_id: completedSaleResult.data.customer_id,
+        customer_id: sale.customer_id,
       };
     }),
     ...saleCosts.map((cost) => ({
@@ -324,39 +262,45 @@ export async function POST(request: Request, context: RouteContextWithId) {
       debit: 0,
       credit: cost.amount,
       phone_unit_id: findCostPhoneUnitId(saleItems, cost),
-      customer_id: completedSaleResult.data.customer_id,
+      customer_id: sale.customer_id,
     })),
   ];
 
-  const journal = await createPostedJournal(supabase, {
-    transaction_date: completedSaleResult.data.sale_date,
-    source_module: "SALE",
-    source_id: id,
-    description: `Penjualan unit ${completedSaleResult.data.sale_number}`,
-    lines: journalLines,
+  const completeResult = await supabase.rpc("rpc_complete_sale", {
+    p_sale_id: id,
+    p_sale_update: saleUpdatePayload,
+    p_unit_ids: unitIds,
+    p_journal_lines: journalLines,
   });
 
-  if (journal.error || !journal.data) {
-    await rollbackSaleToDraft(supabase, id, sale);
-    await rollbackUnitsToPreviousStatus(supabase, units);
-
-    return apiError("SALE_JOURNAL_CREATE_FAILED", journal.error ?? "Journal was not created.", 500);
+  if (completeResult.error) {
+    return apiError("SALE_COMPLETE_RPC_FAILED", completeResult.error.message, 500);
   }
 
-  const linkedSale = await supabase
-    .from("sales")
-    .update({ journal_entry_id: journal.data.id, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select()
-    .single();
+  const completeData = completeResult.data as {
+    sale: Database["public"]["Tables"]["sales"]["Row"];
+    journal_entry_id: string;
+  };
 
-  if (linkedSale.error) {
-    return apiError("SALE_JOURNAL_LINK_FAILED", linkedSale.error.message, 500);
-  }
+  await writeAuditLog(supabase, {
+    request,
+    action: "SALE",
+    entity_table: "sales",
+    entity_id: id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: sale,
+    new_values: completeData.sale,
+    metadata: {
+      journal_entry_id: completeData.journal_entry_id,
+      phone_unit_ids: units.map((unit) => unit.id),
+      total_net_amount: totals.total_net_amount,
+      total_profit_amount: totals.total_profit_amount,
+    },
+  });
 
   return apiOk({
-    sale: linkedSale.data,
-    journal: journal.data,
+    sale: completeData.sale,
+    journal_entry_id: completeData.journal_entry_id,
     totals,
   });
 }
@@ -402,42 +346,4 @@ function findCostPhoneUnitId(saleItems: SaleItemRow[], cost: SaleCostRow) {
   const matchedItem = saleItems.find((item) => item.id === cost.sale_item_id);
 
   return matchedItem?.phone_unit_id ?? saleItems[0]?.phone_unit_id ?? null;
-}
-
-async function rollbackSaleToDraft(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  saleId: string,
-  previousSale: SaleRow,
-) {
-  await supabase
-    .from("sales")
-    .update({
-      status: previousSale.status,
-      payment_account_id: previousSale.payment_account_id,
-      payment_method: previousSale.payment_method,
-      payment_reference: previousSale.payment_reference,
-      payment_proof_url: previousSale.payment_proof_url,
-      payment_proof_filename: previousSale.payment_proof_filename,
-      payment_proof_recorded_at: previousSale.payment_proof_recorded_at,
-      completed_at: previousSale.completed_at,
-      journal_entry_id: previousSale.journal_entry_id,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", saleId);
-}
-
-async function rollbackUnitsToPreviousStatus(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  units: Pick<Database["public"]["Tables"]["phone_units"]["Row"], "id" | "stock_status">[],
-) {
-  for (const unit of units) {
-    await supabase
-      .from("phone_units")
-      .update({
-        stock_status: unit.stock_status,
-        sold_at: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", unit.id);
-  }
 }

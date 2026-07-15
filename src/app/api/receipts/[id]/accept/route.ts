@@ -1,5 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
-import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureReceiptCanMove,
   getOptionalString,
@@ -98,123 +98,39 @@ export async function POST(request: Request, context: RouteContextWithId) {
     );
   }
 
-  const now = new Date().toISOString();
-  const totalPurchaseAmount = detail.units.reduce((sum, unit) => sum + unit.purchase_price, 0);
-  const totalDirectCost = detail.units.reduce((sum, unit) => sum + unit.purchase_transfer_fee, 0);
   const totalUnitCost = detail.units.reduce((sum, unit) => sum + unit.total_unit_cost, 0);
 
-  const receiptUpdate = await supabase
-    .from("unit_receipts")
-    .update({
-      status: "ACCEPTED",
-      decision_at: now,
-      purchase_account_id: receiptAccountId,
-      purchase_payment_reference: receiptReference,
-      purchase_payment_proof_url: receiptProofUrl,
-      purchase_payment_proof_filename:
-        getOptionalString(body.purchase_payment_proof_filename) ??
-        detail.receipt.purchase_payment_proof_filename,
-      purchase_payment_proof_recorded_at:
-        getOptionalString(body.purchase_payment_proof_recorded_at) ?? now,
-      photo_drive_url: receiptPhotoUrl,
-      total_purchase_amount: totalPurchaseAmount,
-      total_direct_cost: totalDirectCost,
-      total_unit_cost: totalUnitCost,
-      updated_at: now,
-    })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (receiptUpdate.error) {
-    return apiError("RECEIPT_ACCEPT_FAILED", receiptUpdate.error.message, 500);
-  }
-
-  const unitUpdate = await supabase
-    .from("phone_units")
-    .update({
-      stock_status: "IN_STOCK",
-      photo_drive_url: receiptPhotoUrl,
-      acquired_at: receiptUpdate.data.receipt_date,
-      updated_at: now,
-    })
-    .eq("receipt_id", id)
-    .in("stock_status", ["DRAFT", "INSPECTION"]);
-
-  if (unitUpdate.error) {
-    return apiError("UNIT_ACCEPT_FAILED", unitUpdate.error.message, 500);
-  }
-
-  const existingJournal = await supabase
-    .from("journal_entries")
-    .select("id")
-    .eq("source_module", "RECEIPT")
-    .eq("source_id", id)
-    .is("deleted_at", null)
-    .maybeSingle();
-
-  if (existingJournal.error) {
-    return apiError("JOURNAL_LOOKUP_FAILED", existingJournal.error.message, 500);
-  }
-
-  if (existingJournal.data) {
-    return apiOk({ ...receiptUpdate.data, journal_entry_id: existingJournal.data.id });
-  }
-
-  const inventoryAccount = await getAccountIdByCode(supabase, "1201");
-
-  if (inventoryAccount.error) {
-    return apiError("INVENTORY_ACCOUNT_NOT_FOUND", inventoryAccount.error, 500);
-  }
-
-  if (!inventoryAccount.data) {
-    return apiError("INVENTORY_ACCOUNT_NOT_FOUND", "Account 1201 is not configured.", 500);
-  }
-
-  const inventoryAccountId = inventoryAccount.data;
-
-  const journal = await createPostedJournal(supabase, {
-    transaction_date: receiptUpdate.data.receipt_date,
-    source_module: "RECEIPT",
-    source_id: id,
-    description: `Penerimaan unit ${receiptUpdate.data.receipt_number}`,
-    lines: [
-      ...detail.units.map((unit) => ({
-        account_id: inventoryAccountId,
-        description: `Persediaan ${unit.stock_code}`,
-        debit: unit.total_unit_cost,
-        credit: 0,
-        phone_unit_id: unit.id,
-        seller_id: detail.receipt.seller_id,
-      })),
-      {
-        account_id: receiptAccountId,
-        description: `Pembayaran pembelian ${receiptUpdate.data.receipt_number}`,
-        debit: 0,
-        credit: totalUnitCost,
-        seller_id: detail.receipt.seller_id,
-      },
-    ],
+  const acceptedReceipt = await supabase.rpc("rpc_accept_receipt", {
+    p_receipt_id: id,
+    p_purchase_account_id: receiptAccountId,
+    p_purchase_payment_reference: receiptReference,
+    p_purchase_payment_proof_url: receiptProofUrl,
+    p_purchase_payment_proof_filename:
+      getOptionalString(body.purchase_payment_proof_filename) ?? detail.receipt.purchase_payment_proof_filename,
+    p_purchase_payment_proof_recorded_at: getOptionalString(body.purchase_payment_proof_recorded_at),
+    p_photo_drive_url: receiptPhotoUrl,
   });
 
-  if (journal.error) {
-    return apiError("JOURNAL_CREATE_FAILED", journal.error, 500);
+  if (acceptedReceipt.error) {
+    return apiError("RECEIPT_ACCEPT_RPC_FAILED", acceptedReceipt.error.message, 500);
   }
 
-  if (!journal.data) {
-    return apiError("JOURNAL_CREATE_FAILED", "Journal was not created.", 500);
-  }
+  const acceptedData = acceptedReceipt.data as { receipt: unknown; journal_entry_id: string };
 
-  const linkedReceipt = await supabase
-    .from("unit_receipts")
-    .update({ journal_entry_id: journal.data.id, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select()
-    .single();
+  await writeAuditLog(supabase, {
+    request,
+    action: "ACCEPT",
+    entity_table: "unit_receipts",
+    entity_id: id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: detail.receipt,
+    new_values: acceptedData.receipt,
+    metadata: {
+      phone_unit_ids: detail.units.map((unit) => unit.id),
+      journal_entry_id: acceptedData.journal_entry_id,
+      total_unit_cost: totalUnitCost,
+    },
+  });
 
-  if (linkedReceipt.error) {
-    return apiError("JOURNAL_LINK_FAILED", linkedReceipt.error.message, 500);
-  }
-
-  return apiOk(linkedReceipt.data);
+  return apiOk(acceptedData.receipt);
 }

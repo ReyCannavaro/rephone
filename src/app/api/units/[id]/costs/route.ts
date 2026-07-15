@@ -1,5 +1,6 @@
 import { apiError, apiOk } from "@/lib/api/responses";
-import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
+import { writeAuditLog } from "@/lib/audit/audit-service";
+import { getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   getDateString,
   getNumber,
@@ -123,81 +124,50 @@ export async function POST(request: Request, context: RouteContextWithId) {
     notes: getOptionalString(body.notes),
   };
 
-  const costResult = await supabase.from("unit_costs").insert(costPayload).select().single();
-
-  if (costResult.error) {
-    return apiError("UNIT_COST_CREATE_FAILED", costResult.error.message, 500);
-  }
-
-  const nextTotalUnitCost = Math.round((unit.total_unit_cost + amount) * 100) / 100;
-  const unitUpdate = await supabase
-    .from("phone_units")
-    .update({ total_unit_cost: nextTotalUnitCost, updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select("id, stock_code, total_unit_cost")
-    .single();
-
-  if (unitUpdate.error) {
-    await supabase
-      .from("unit_costs")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", costResult.data.id);
-
-    return apiError("UNIT_COST_TOTAL_UPDATE_FAILED", unitUpdate.error.message, 500);
-  }
-
-  const journal = await createPostedJournal(supabase, {
-    transaction_date: costDate,
-    source_module: "UNIT_COST",
-    source_id: costResult.data.id,
-    description: `Biaya unit ${unit.stock_code}: ${description}`,
-    lines: [
-      {
-        account_id: inventoryAccountId.data,
-        description,
-        debit: amount,
-        credit: 0,
-        phone_unit_id: id,
-      },
-      {
-        account_id: paymentAccountId,
-        description,
-        debit: 0,
-        credit: amount,
-        phone_unit_id: id,
-      },
-    ],
+  const unitCostResult = await supabase.rpc("rpc_add_unit_cost", {
+    p_phone_unit_id: id,
+    p_cost: costPayload,
+    p_inventory_account_id: inventoryAccountId.data,
   });
 
-  if (journal.error || !journal.data) {
-    await supabase
-      .from("phone_units")
-      .update({ total_unit_cost: unit.total_unit_cost, updated_at: new Date().toISOString() })
-      .eq("id", id);
-    await supabase
-      .from("unit_costs")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", costResult.data.id);
-
-    return apiError("UNIT_COST_JOURNAL_CREATE_FAILED", journal.error ?? "Journal was not created.", 500);
+  if (unitCostResult.error) {
+    return apiError("UNIT_COST_RPC_FAILED", unitCostResult.error.message, 500);
   }
 
-  const linkedCost = await supabase
-    .from("unit_costs")
-    .update({ journal_entry_id: journal.data.id, updated_at: new Date().toISOString() })
-    .eq("id", costResult.data.id)
-    .select()
-    .single();
+  const unitCostData = unitCostResult.data as {
+    cost: Database["public"]["Tables"]["unit_costs"]["Row"];
+    unit: Pick<Database["public"]["Tables"]["phone_units"]["Row"], "id" | "stock_code" | "total_unit_cost">;
+    journal_entry_id: string;
+  };
 
-  if (linkedCost.error) {
-    return apiError("UNIT_COST_JOURNAL_LINK_FAILED", linkedCost.error.message, 500);
-  }
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "unit_costs",
+    entity_id: unitCostData.cost.id,
+    reason: getOptionalString(body.audit_reason) ?? description,
+    old_values: {
+      unit: {
+        id: unit.id,
+        stock_code: unit.stock_code,
+        total_unit_cost: unit.total_unit_cost,
+      },
+    },
+    new_values: {
+      cost: unitCostData.cost,
+      unit: unitCostData.unit,
+    },
+    metadata: {
+      phone_unit_id: id,
+      journal_entry_id: unitCostData.journal_entry_id,
+    },
+  });
 
   return apiOk(
     {
-      cost: linkedCost.data,
-      unit: unitUpdate.data,
-      journal: journal.data,
+      cost: unitCostData.cost,
+      unit: unitCostData.unit,
+      journal_entry_id: unitCostData.journal_entry_id,
     },
     { status: 201 },
   );
