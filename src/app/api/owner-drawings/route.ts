@@ -12,7 +12,7 @@ import {
   getNumber,
   getOptionalString,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
 } from "@/lib/receipts/receipt-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Database } from "@/lib/supabase/database.types";
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   const accountId = getOptionalString(body.account_id);
   const amount = getNumber(body.amount);
   const proofUrl = getOptionalString(body.proof_url);
-  const urlError = validateHttpsUrl(proofUrl, "proof_url");
+  const urlError = validateGoogleDriveUrl(proofUrl, "proof_url");
 
   if (urlError) {
     return apiError("INVALID_URL", urlError);

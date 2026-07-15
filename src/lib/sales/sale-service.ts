@@ -4,7 +4,7 @@ import {
   getOptionalString,
   getString,
   isRecord,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
 } from "@/lib/receipts/receipt-service";
 
 export const sellableStockStatuses = ["IN_STOCK", "RESERVED"] as const;
@@ -87,7 +87,7 @@ export function getSalePaymentMethod(value: unknown) {
 }
 
 export function validatePaymentProofUrl(value: string | null) {
-  return validateHttpsUrl(value, "payment_proof_url");
+  return validateGoogleDriveUrl(value, "payment_proof_url");
 }
 
 export function calculateSaleTotals(input: {

@@ -7,7 +7,7 @@ import {
   getOptionalString,
   getString,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
   type RouteContextWithId,
 } from "@/lib/receipts/receipt-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -34,7 +34,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
   const amount = getNumber(body.amount);
   const paymentAccountId = getString(body.payment_account_id);
   const proofUrl = getOptionalString(body.proof_url);
-  const urlError = validateHttpsUrl(proofUrl, "proof_url");
+  const urlError = validateGoogleDriveUrl(proofUrl, "proof_url");
 
   if (urlError) {
     return apiError("INVALID_URL", urlError);
