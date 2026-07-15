@@ -669,6 +669,106 @@ export type Database = {
           completed_at?: string | null;
         }
       >;
+      capital_contributions: Table<
+        BaseTransactionRow & {
+          contribution_number: string;
+          contribution_date: string;
+          account_id: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          contribution_number: string;
+          contribution_date: string;
+          account_id: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      owner_drawings: Table<
+        BaseTransactionRow & {
+          drawing_number: string;
+          drawing_date: string;
+          account_id: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          drawing_number: string;
+          drawing_date: string;
+          account_id: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      operating_expenses: Table<
+        BaseTransactionRow & {
+          expense_number: string;
+          expense_date: string;
+          cost_category_id: string | null;
+          expense_account_id: string;
+          payment_account_id: string;
+          description: string;
+          amount: number;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          expense_number: string;
+          expense_date: string;
+          cost_category_id?: string | null;
+          expense_account_id: string;
+          payment_account_id: string;
+          description: string;
+          amount: number;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
+      cash_adjustments: Table<
+        BaseTransactionRow & {
+          adjustment_number: string;
+          adjustment_date: string;
+          account_id: string;
+          adjustment_type: "INCREASE" | "DECREASE";
+          amount: number;
+          reason: string;
+          offset_account_id: string | null;
+          reference: string | null;
+          proof_url: string | null;
+          proof_filename: string | null;
+          journal_entry_id: string | null;
+        },
+        BaseTransactionInsert & {
+          adjustment_number: string;
+          adjustment_date: string;
+          account_id: string;
+          adjustment_type: "INCREASE" | "DECREASE";
+          amount: number;
+          reason: string;
+          offset_account_id?: string | null;
+          reference?: string | null;
+          proof_url?: string | null;
+          proof_filename?: string | null;
+          journal_entry_id?: string | null;
+        }
+      >;
       journal_entries: Table<
         BaseTransactionRow & {
           journal_number: string;

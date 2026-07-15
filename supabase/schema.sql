@@ -598,6 +598,97 @@ create table if not exists public.sale_returns (
   )
 );
 
+create table if not exists public.capital_contributions (
+  id uuid primary key default gen_random_uuid(),
+  contribution_number varchar(40) not null unique,
+  contribution_date date not null,
+  account_id uuid not null references public.accounts(id),
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint capital_contributions_amount_positive check (amount > 0),
+  constraint capital_contributions_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.owner_drawings (
+  id uuid primary key default gen_random_uuid(),
+  drawing_number varchar(40) not null unique,
+  drawing_date date not null,
+  account_id uuid not null references public.accounts(id),
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint owner_drawings_amount_positive check (amount > 0),
+  constraint owner_drawings_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.operating_expenses (
+  id uuid primary key default gen_random_uuid(),
+  expense_number varchar(40) not null unique,
+  expense_date date not null,
+  cost_category_id uuid references public.cost_categories(id),
+  expense_account_id uuid not null references public.accounts(id),
+  payment_account_id uuid not null references public.accounts(id),
+  description varchar(255) not null,
+  amount numeric(18,2) not null,
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint operating_expenses_amount_positive check (amount > 0),
+  constraint operating_expenses_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
+create table if not exists public.cash_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  adjustment_number varchar(40) not null unique,
+  adjustment_date date not null,
+  account_id uuid not null references public.accounts(id),
+  adjustment_type varchar(20) not null,
+  amount numeric(18,2) not null,
+  reason varchar(255) not null,
+  offset_account_id uuid references public.accounts(id),
+  reference varchar(100),
+  proof_url text,
+  proof_filename varchar(255),
+  journal_entry_id uuid,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint cash_adjustments_type_allowed check (adjustment_type in ('INCREASE', 'DECREASE')),
+  constraint cash_adjustments_amount_positive check (amount > 0),
+  constraint cash_adjustments_proof_url_https check (proof_url is null or proof_url ~ '^https://')
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -699,6 +790,16 @@ create index if not exists sale_costs_cost_category_id_idx on public.sale_costs(
 create index if not exists sale_returns_sale_id_idx on public.sale_returns(sale_id);
 create index if not exists sale_returns_return_date_idx on public.sale_returns(return_date);
 create index if not exists sale_returns_target_stock_status_idx on public.sale_returns(target_stock_status);
+create index if not exists capital_contributions_date_idx on public.capital_contributions(contribution_date);
+create index if not exists capital_contributions_account_id_idx on public.capital_contributions(account_id);
+create index if not exists owner_drawings_date_idx on public.owner_drawings(drawing_date);
+create index if not exists owner_drawings_account_id_idx on public.owner_drawings(account_id);
+create index if not exists operating_expenses_date_idx on public.operating_expenses(expense_date);
+create index if not exists operating_expenses_payment_account_id_idx on public.operating_expenses(payment_account_id);
+create index if not exists operating_expenses_expense_account_id_idx on public.operating_expenses(expense_account_id);
+create index if not exists cash_adjustments_date_idx on public.cash_adjustments(adjustment_date);
+create index if not exists cash_adjustments_account_id_idx on public.cash_adjustments(account_id);
+create index if not exists cash_adjustments_type_idx on public.cash_adjustments(adjustment_type);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
@@ -775,6 +876,50 @@ begin
   ) then
     alter table public.sale_returns
       add constraint sale_returns_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'capital_contributions_journal_entry_id_fkey'
+  ) then
+    alter table public.capital_contributions
+      add constraint capital_contributions_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'owner_drawings_journal_entry_id_fkey'
+  ) then
+    alter table public.owner_drawings
+      add constraint owner_drawings_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'operating_expenses_journal_entry_id_fkey'
+  ) then
+    alter table public.operating_expenses
+      add constraint operating_expenses_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'cash_adjustments_journal_entry_id_fkey'
+  ) then
+    alter table public.cash_adjustments
+      add constraint cash_adjustments_journal_entry_id_fkey
       foreign key (journal_entry_id) references public.journal_entries(id);
   end if;
 end;
@@ -876,6 +1021,22 @@ create or replace trigger sale_returns_set_updated_at
 before update on public.sale_returns
 for each row execute function public.set_updated_at();
 
+create or replace trigger capital_contributions_set_updated_at
+before update on public.capital_contributions
+for each row execute function public.set_updated_at();
+
+create or replace trigger owner_drawings_set_updated_at
+before update on public.owner_drawings
+for each row execute function public.set_updated_at();
+
+create or replace trigger operating_expenses_set_updated_at
+before update on public.operating_expenses
+for each row execute function public.set_updated_at();
+
+create or replace trigger cash_adjustments_set_updated_at
+before update on public.cash_adjustments
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -908,6 +1069,10 @@ alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
 alter table public.sale_costs enable row level security;
 alter table public.sale_returns enable row level security;
+alter table public.capital_contributions enable row level security;
+alter table public.owner_drawings enable row level security;
+alter table public.operating_expenses enable row level security;
+alter table public.cash_adjustments enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
 
@@ -982,6 +1147,18 @@ create policy "Sale costs are readable" on public.sale_costs for select using (d
 
 drop policy if exists "Sale returns are readable" on public.sale_returns;
 create policy "Sale returns are readable" on public.sale_returns for select using (deleted_at is null);
+
+drop policy if exists "Capital contributions are readable" on public.capital_contributions;
+create policy "Capital contributions are readable" on public.capital_contributions for select using (deleted_at is null);
+
+drop policy if exists "Owner drawings are readable" on public.owner_drawings;
+create policy "Owner drawings are readable" on public.owner_drawings for select using (deleted_at is null);
+
+drop policy if exists "Operating expenses are readable" on public.operating_expenses;
+create policy "Operating expenses are readable" on public.operating_expenses for select using (deleted_at is null);
+
+drop policy if exists "Cash adjustments are readable" on public.cash_adjustments;
+create policy "Cash adjustments are readable" on public.cash_adjustments for select using (deleted_at is null);
 
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);
