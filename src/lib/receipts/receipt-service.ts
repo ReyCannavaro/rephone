@@ -31,6 +31,8 @@ const inspectionStatuses: NonNullable<InspectionStatus>[] = [
   "UNKNOWN",
   "NOT_APPLICABLE",
 ];
+const activeImeiStatuses = ["ACTIVE", "CLEAN", "VALID", "OK", "TERDAFTAR", "AMAN"] as const;
+const googleDriveHosts = ["drive.google.com", "docs.google.com"] as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -108,6 +110,46 @@ export function validateHttpsUrl(value: string | null, field: string) {
   } catch {
     return `${field} must be a valid URL.`;
   }
+}
+
+export function validateGoogleDriveUrl(value: string | null, field: string) {
+  const httpsError = validateHttpsUrl(value, field);
+
+  if (httpsError || !value) {
+    return httpsError;
+  }
+
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  const isGoogleDriveHost =
+    googleDriveHosts.includes(hostname as (typeof googleDriveHosts)[number]) ||
+    hostname.endsWith(".googleusercontent.com");
+
+  if (!isGoogleDriveHost) {
+    return `${field} must be a Google Drive URL.`;
+  }
+
+  return null;
+}
+
+export function validateImei(value: string | null, field: string) {
+  if (!value) {
+    return null;
+  }
+
+  if (!/^\d{14,17}$/.test(value)) {
+    return `${field} must contain 14 to 17 digits.`;
+  }
+
+  return null;
+}
+
+export function isActiveImeiStatus(value: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  return activeImeiStatuses.includes(value.trim().toUpperCase() as (typeof activeImeiStatuses)[number]);
 }
 
 export function generateReceiptNumber(date = new Date()) {

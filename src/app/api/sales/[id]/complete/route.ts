@@ -4,7 +4,7 @@ import { getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   getOptionalString,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
   type RouteContextWithId,
 } from "@/lib/receipts/receipt-service";
 import {
@@ -38,7 +38,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
   const paymentReference = getOptionalString(body.payment_reference);
   const paymentProofUrl = getOptionalString(body.payment_proof_url);
   const paymentMethod = getSalePaymentMethod(body.payment_method);
-  const paymentUrlError = validateHttpsUrl(paymentProofUrl, "payment_proof_url");
+  const paymentUrlError = validateGoogleDriveUrl(paymentProofUrl, "payment_proof_url");
 
   if (paymentUrlError) {
     return apiError("INVALID_URL", paymentUrlError);

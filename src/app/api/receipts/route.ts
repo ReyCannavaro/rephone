@@ -12,7 +12,8 @@ import {
   getString,
   isRecord,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
+  validateImei,
 } from "@/lib/receipts/receipt-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Database } from "@/lib/supabase/database.types";
@@ -100,19 +101,25 @@ export async function POST(request: Request) {
   const totalUnitCost = getNumber(unit.total_unit_cost, purchasePrice + purchaseTransferFee);
   const photoDriveUrl = getOptionalString(body.photo_drive_url) ?? getOptionalString(unit.photo_drive_url);
   const proofUrl = getOptionalString(body.purchase_payment_proof_url);
+  const imei2 = getOptionalString(unit.imei_2);
   const urlError =
-    validateHttpsUrl(photoDriveUrl, "photo_drive_url") ??
-    validateHttpsUrl(proofUrl, "purchase_payment_proof_url");
+    validateGoogleDriveUrl(photoDriveUrl, "photo_drive_url") ??
+    validateGoogleDriveUrl(proofUrl, "purchase_payment_proof_url");
+  const imeiError = validateImei(imei1, "unit.imei_1") ?? validateImei(imei2, "unit.imei_2");
 
   if (urlError) {
     return apiError("INVALID_URL", urlError);
   }
 
+  if (imeiError) {
+    return apiError("INVALID_IMEI", imeiError);
+  }
+
   const supabase = createSupabaseAdminClient();
   const duplicate = await supabase
     .from("phone_units")
-    .select("id, stock_code")
-    .eq("imei_1", imei1)
+    .select("id, stock_code, imei_1, imei_2")
+    .or(`imei_1.eq.${imei1},imei_2.eq.${imei1}`)
     .neq("stock_status", "REJECTED")
     .is("deleted_at", null)
     .maybeSingle();
@@ -128,6 +135,29 @@ export async function POST(request: Request) {
       409,
       duplicate.data,
     );
+  }
+
+  if (imei2) {
+    const duplicateImei2 = await supabase
+      .from("phone_units")
+      .select("id, stock_code, imei_1, imei_2")
+      .or(`imei_1.eq.${imei2},imei_2.eq.${imei2}`)
+      .neq("stock_status", "REJECTED")
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (duplicateImei2.error) {
+      return apiError("IMEI_CHECK_FAILED", duplicateImei2.error.message, 500);
+    }
+
+    if (duplicateImei2.data) {
+      return apiError(
+        "DUPLICATE_IMEI",
+        "IMEI 2 already exists on an active unit.",
+        409,
+        duplicateImei2.data,
+      );
+    }
   }
 
   const receiptPayload: ReceiptInsert = {
@@ -168,7 +198,7 @@ export async function POST(request: Request) {
     color_id: getOptionalString(unit.color_id),
     physical_condition_id: getOptionalString(unit.physical_condition_id),
     imei_1: imei1,
-    imei_2: getOptionalString(unit.imei_2),
+    imei_2: imei2,
     serial_number: getOptionalString(unit.serial_number),
     sim_type: parseSimType(unit.sim_type),
     battery_health:
@@ -250,7 +280,7 @@ export async function POST(request: Request) {
     .filter((row): row is PhotoInsert => row !== null);
 
   const invalidPhotoUrl = photoRows
-    .map((photo) => validateHttpsUrl(photo.drive_url, "unit.photos[].drive_url"))
+    .map((photo) => validateGoogleDriveUrl(photo.drive_url, "unit.photos[].drive_url"))
     .find(Boolean);
 
   if (invalidPhotoUrl) {

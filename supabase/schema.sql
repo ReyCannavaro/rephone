@@ -6,6 +6,78 @@ language plpgsql
 as $$
 begin
   new.updated_at = now();
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.is_google_drive_url(value text)
+returns boolean
+language sql
+immutable
+as $$
+  select
+    value is null
+    or value ~* '^https://([^/]+\.)?(drive\.google\.com|docs\.google\.com|googleusercontent\.com)(/|$)'
+$$;
+
+create or replace function public.is_active_imei_status(value text)
+returns boolean
+language sql
+immutable
+as $$
+  select upper(coalesce(trim(value), '')) in ('ACTIVE', 'CLEAN', 'VALID', 'OK', 'TERDAFTAR', 'AMAN')
+$$;
+
+create or replace function public.prevent_posted_journal_delete()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'DELETE' and old.status = 'POSTED' then
+    raise exception 'Posted journal entries cannot be deleted.';
+  end if;
+
+  if tg_op = 'UPDATE'
+    and old.status = 'POSTED'
+    and old.deleted_at is null
+    and new.deleted_at is not null
+  then
+    raise exception 'Posted journal entries cannot be soft-deleted.';
+  end if;
+
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.prevent_posted_journal_line_delete()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_status varchar(20);
+begin
+  select status into v_status
+  from public.journal_entries
+  where id = old.journal_entry_id;
+
+  if v_status = 'POSTED' then
+    if tg_op = 'DELETE' then
+      raise exception 'Lines from posted journal entries cannot be deleted.';
+    end if;
+
+    if tg_op = 'UPDATE' and old.deleted_at is null and new.deleted_at is not null then
+      raise exception 'Lines from posted journal entries cannot be soft-deleted.';
+    end if;
+  end if;
+
   return new;
 end;
 $$;
@@ -770,6 +842,83 @@ create table if not exists public.audit_logs (
   )
 );
 
+create or replace function public.rpc_get_posted_account_balance(p_account_id uuid)
+returns numeric
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_normal_balance varchar(10);
+  v_raw_balance numeric(18,2);
+begin
+  select normal_balance into v_normal_balance
+  from public.accounts
+  where id = p_account_id;
+
+  if v_normal_balance is null then
+    raise exception 'Account % was not found.', p_account_id;
+  end if;
+
+  select coalesce(sum(line.debit - line.credit), 0)
+  into v_raw_balance
+  from public.journal_lines line
+  join public.journal_entries entry on entry.id = line.journal_entry_id
+  where line.account_id = p_account_id
+    and line.deleted_at is null
+    and entry.deleted_at is null
+    and entry.status = 'POSTED';
+
+  if v_normal_balance = 'DEBIT' then
+    return round(v_raw_balance, 2);
+  end if;
+
+  return round(v_raw_balance * -1, 2);
+end;
+$$;
+
+create or replace function public.rpc_assert_cash_balances_non_negative(p_lines jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_account record;
+  v_next_balance numeric(18,2);
+begin
+  for v_account in
+    select
+      account.id,
+      account.account_code,
+      account.account_name,
+      account.normal_balance,
+      round(sum(coalesce(line.debit, 0) - coalesce(line.credit, 0)), 2) as debit_delta
+    from jsonb_to_recordset(coalesce(p_lines, '[]'::jsonb)) as line(
+      account_id uuid,
+      debit numeric,
+      credit numeric
+    )
+    join public.accounts account on account.id = line.account_id
+    where account.is_cash_account = true
+    group by account.id, account.account_code, account.account_name, account.normal_balance
+  loop
+    if v_account.normal_balance = 'DEBIT' then
+      v_next_balance := public.rpc_get_posted_account_balance(v_account.id) + v_account.debit_delta;
+    else
+      v_next_balance := public.rpc_get_posted_account_balance(v_account.id) - v_account.debit_delta;
+    end if;
+
+    if v_next_balance < 0 then
+      raise exception 'Insufficient account balance for % - %. Resulting balance would be %.',
+        v_account.account_code,
+        v_account.account_name,
+        v_next_balance;
+    end if;
+  end loop;
+end;
+$$;
+
 create or replace function public.rpc_create_posted_journal(
   p_transaction_date date,
   p_source_module varchar,
@@ -803,6 +952,8 @@ begin
   if v_total_debit <> v_total_credit then
     raise exception 'Journal is not balanced.';
   end if;
+
+  perform public.rpc_assert_cash_balances_non_negative(p_lines);
 
   insert into public.journal_entries (
     journal_number,
@@ -886,6 +1037,8 @@ declare
   v_total_direct numeric(18,2);
   v_total_unit numeric(18,2);
   v_lines jsonb;
+  v_invalid_unit public.phone_units%rowtype;
+  v_missing_checklist_count integer;
 begin
   select * into v_receipt
   from public.unit_receipts
@@ -900,6 +1053,12 @@ begin
     raise exception 'Receipt with status % cannot be accepted.', v_receipt.status;
   end if;
 
+  if not public.is_google_drive_url(p_photo_drive_url)
+    or not public.is_google_drive_url(p_purchase_payment_proof_url)
+  then
+    raise exception 'Accepted receipt requires Google Drive URLs for photo and payment proof.';
+  end if;
+
   select
     coalesce(sum(purchase_price), 0),
     coalesce(sum(purchase_transfer_fee), 0),
@@ -910,6 +1069,44 @@ begin
 
   if v_total_purchase <= 0 then
     raise exception 'Receipt cannot be accepted without unit purchase amount.';
+  end if;
+
+  select * into v_invalid_unit
+  from public.phone_units
+  where receipt_id = p_receipt_id
+    and deleted_at is null
+    and (
+      imei_1 is null
+      or imei_1 !~ '^[0-9]{14,17}$'
+      or (imei_2 is not null and imei_2 !~ '^[0-9]{14,17}$')
+      or purchase_price <= 0
+      or not public.is_active_imei_status(imei_status)
+      or (icloud_status is null and google_account_status is null)
+    )
+  limit 1;
+
+  if found then
+    raise exception 'Unit % is not ready for acceptance. Valid IMEI, active IMEI status, purchase price, and account status are required.',
+      v_invalid_unit.stock_code;
+  end if;
+
+  select count(*) into v_missing_checklist_count
+  from public.phone_units unit
+  join public.inspection_items item
+    on item.is_active = true
+    and item.is_required = true
+    and (item.applies_to_brand_id is null or item.applies_to_brand_id = unit.brand_id)
+  left join public.unit_inspection_results result
+    on result.phone_unit_id = unit.id
+    and result.inspection_item_id = item.id
+    and result.deleted_at is null
+  where unit.receipt_id = p_receipt_id
+    and unit.deleted_at is null
+    and result.id is null;
+
+  if v_missing_checklist_count > 0 then
+    raise exception 'Required inspection checklist is incomplete for this receipt. Missing % item(s).',
+      v_missing_checklist_count;
   end if;
 
   update public.unit_receipts
@@ -1411,9 +1608,77 @@ create index if not exists audit_logs_action_idx on public.audit_logs(action);
 create index if not exists audit_logs_entity_idx on public.audit_logs(entity_table, entity_id);
 create index if not exists audit_logs_actor_user_id_idx on public.audit_logs(actor_user_id);
 
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'unit_receipts_drive_urls_google') then
+    alter table public.unit_receipts
+      add constraint unit_receipts_drive_urls_google check (
+        public.is_google_drive_url(photo_drive_url)
+        and public.is_google_drive_url(purchase_payment_proof_url)
+      );
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'phone_units_imei_format') then
+    alter table public.phone_units
+      add constraint phone_units_imei_format check (
+        imei_1 ~ '^[0-9]{14,17}$'
+        and (imei_2 is null or imei_2 ~ '^[0-9]{14,17}$')
+      );
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'phone_units_drive_url_google') then
+    alter table public.phone_units
+      add constraint phone_units_drive_url_google check (public.is_google_drive_url(photo_drive_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'unit_photos_drive_url_google') then
+    alter table public.unit_photos
+      add constraint unit_photos_drive_url_google check (public.is_google_drive_url(drive_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'unit_costs_proof_url_google') then
+    alter table public.unit_costs
+      add constraint unit_costs_proof_url_google check (public.is_google_drive_url(proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'sales_payment_proof_url_google') then
+    alter table public.sales
+      add constraint sales_payment_proof_url_google check (public.is_google_drive_url(payment_proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'sale_returns_refund_proof_url_google') then
+    alter table public.sale_returns
+      add constraint sale_returns_refund_proof_url_google check (public.is_google_drive_url(refund_proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'capital_contributions_proof_url_google') then
+    alter table public.capital_contributions
+      add constraint capital_contributions_proof_url_google check (public.is_google_drive_url(proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'owner_drawings_proof_url_google') then
+    alter table public.owner_drawings
+      add constraint owner_drawings_proof_url_google check (public.is_google_drive_url(proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'operating_expenses_proof_url_google') then
+    alter table public.operating_expenses
+      add constraint operating_expenses_proof_url_google check (public.is_google_drive_url(proof_url));
+  end if;
+
+  if not exists (select 1 from pg_constraint where conname = 'cash_adjustments_proof_url_google') then
+    alter table public.cash_adjustments
+      add constraint cash_adjustments_proof_url_google check (public.is_google_drive_url(proof_url));
+  end if;
+end $$;
+
 create unique index if not exists phone_units_active_imei_1_unique_idx
 on public.phone_units (imei_1)
 where deleted_at is null and stock_status <> 'REJECTED';
+
+create unique index if not exists phone_units_active_imei_2_unique_idx
+on public.phone_units (imei_2)
+where imei_2 is not null and deleted_at is null and stock_status <> 'REJECTED';
 
 create unique index if not exists unit_photos_primary_unique_idx
 on public.unit_photos (phone_unit_id)
@@ -1648,6 +1913,14 @@ for each row execute function public.set_updated_at();
 create or replace trigger journal_lines_set_updated_at
 before update on public.journal_lines
 for each row execute function public.set_updated_at();
+
+create or replace trigger journal_entries_prevent_posted_delete
+before update or delete on public.journal_entries
+for each row execute function public.prevent_posted_journal_delete();
+
+create or replace trigger journal_lines_prevent_posted_delete
+before update or delete on public.journal_lines
+for each row execute function public.prevent_posted_journal_line_delete();
 
 alter table public.brands enable row level security;
 alter table public.phone_models enable row level security;

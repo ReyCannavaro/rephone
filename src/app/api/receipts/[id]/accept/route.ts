@@ -3,8 +3,10 @@ import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureReceiptCanMove,
   getOptionalString,
+  isActiveImeiStatus,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
+  validateImei,
   type RouteContextWithId,
 } from "@/lib/receipts/receipt-service";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -25,8 +27,8 @@ export async function POST(request: Request, context: RouteContextWithId) {
   const paymentProofUrl = getOptionalString(body.purchase_payment_proof_url);
   const photoDriveUrl = getOptionalString(body.photo_drive_url);
   const urlError =
-    validateHttpsUrl(paymentProofUrl, "purchase_payment_proof_url") ??
-    validateHttpsUrl(photoDriveUrl, "photo_drive_url");
+    validateGoogleDriveUrl(paymentProofUrl, "purchase_payment_proof_url") ??
+    validateGoogleDriveUrl(photoDriveUrl, "photo_drive_url");
 
   if (urlError) {
     return apiError("INVALID_URL", urlError);
@@ -47,7 +49,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
 
   const requiredInspectionIds = await supabase
     .from("inspection_items")
-    .select("id")
+    .select("id, applies_to_brand_id")
     .eq("is_active", true)
     .eq("is_required", true);
 
@@ -55,16 +57,29 @@ export async function POST(request: Request, context: RouteContextWithId) {
     return apiError("INSPECTION_REQUIREMENTS_FAILED", requiredInspectionIds.error.message, 500);
   }
 
-  const requiredIds = new Set((requiredInspectionIds.data ?? []).map((item) => item.id));
-  const inspectedIds = new Set(detail.inspections.map((inspection) => inspection.inspection_item_id));
-  const missingInspectionCount = [...requiredIds].filter((itemId) => !inspectedIds.has(itemId)).length;
+  const missingInspections = detail.units.flatMap((unit) => {
+    const inspectedIds = new Set(
+      detail.inspections
+        .filter((inspection) => inspection.phone_unit_id === unit.id)
+        .map((inspection) => inspection.inspection_item_id),
+    );
 
-  if (missingInspectionCount > 0) {
+    return (requiredInspectionIds.data ?? [])
+      .filter((item) => !item.applies_to_brand_id || item.applies_to_brand_id === unit.brand_id)
+      .filter((item) => !inspectedIds.has(item.id))
+      .map((item) => ({
+        phone_unit_id: unit.id,
+        stock_code: unit.stock_code,
+        inspection_item_id: item.id,
+      }));
+  });
+
+  if (missingInspections.length > 0) {
     return apiError(
       "INSPECTION_INCOMPLETE",
-      "Required inspection checklist must be completed before accepting a receipt.",
+      "Required inspection checklist must be completed for each unit brand before accepting a receipt.",
       409,
-      { missing_count: missingInspectionCount },
+      { missing_count: missingInspections.length, missing_items: missingInspections },
     );
   }
 
@@ -84,15 +99,17 @@ export async function POST(request: Request, context: RouteContextWithId) {
   const invalidUnit = detail.units.find(
     (unit) =>
       !unit.imei_1 ||
+      validateImei(unit.imei_1, "imei_1") ||
+      validateImei(unit.imei_2, "imei_2") ||
       unit.purchase_price <= 0 ||
-      !unit.imei_status ||
+      !isActiveImeiStatus(unit.imei_status) ||
       (!unit.icloud_status && !unit.google_account_status),
   );
 
   if (invalidUnit) {
     return apiError(
       "UNIT_NOT_READY",
-      "Every accepted unit requires IMEI 1, purchase price, IMEI status, and iCloud or Google account status.",
+      "Every accepted unit requires valid IMEI, active IMEI status, purchase price, and iCloud or Google account status.",
       409,
       { unit_id: invalidUnit.id, stock_code: invalidUnit.stock_code },
     );

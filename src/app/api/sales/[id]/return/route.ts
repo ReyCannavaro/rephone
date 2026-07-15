@@ -5,7 +5,7 @@ import {
   getNumber,
   getOptionalString,
   readJsonObject,
-  validateHttpsUrl,
+  validateGoogleDriveUrl,
   type RouteContextWithId,
 } from "@/lib/receipts/receipt-service";
 import {
@@ -30,7 +30,7 @@ export async function POST(request: Request, context: RouteContextWithId) {
   const returnDate = getDateString(body.return_date);
   const targetStockStatus = getReturnTargetStockStatus(body.target_stock_status);
   const refundProofUrl = getOptionalString(body.refund_proof_url);
-  const refundProofError = validateHttpsUrl(refundProofUrl, "refund_proof_url");
+  const refundProofError = validateGoogleDriveUrl(refundProofUrl, "refund_proof_url");
 
   if (refundProofError) {
     return apiError("INVALID_URL", refundProofError);
