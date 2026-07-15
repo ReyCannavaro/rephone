@@ -6,11 +6,15 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --import tsx --test tests/finance-service.test.ts",
+    "quality": "npm run lint && npm run test && npm run build",
+    "types:supabase:local": "supabase gen types --local --schema public > src/lib/supabase/database.types.ts",
+    "types:supabase:linked": "supabase gen types --linked --schema public > src/lib/supabase/database.types.ts"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.1",
-    "@supabase/supabase-js": "^2.109.0",
+    "@supabase/ssr": "0.12.0",
+    "@supabase/supabase-js": "2.109.0",
     "next": "16.2.10",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -23,6 +27,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }
