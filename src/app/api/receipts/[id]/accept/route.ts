@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   ensureReceiptCanMove,
@@ -158,7 +159,24 @@ export async function POST(request: Request, context: RouteContextWithId) {
   }
 
   if (existingJournal.data) {
-    return apiOk({ ...receiptUpdate.data, journal_entry_id: existingJournal.data.id });
+    const responseData = { ...receiptUpdate.data, journal_entry_id: existingJournal.data.id };
+
+    await writeAuditLog(supabase, {
+      request,
+      action: "ACCEPT",
+      entity_table: "unit_receipts",
+      entity_id: id,
+      reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+      old_values: detail.receipt,
+      new_values: responseData,
+      metadata: {
+        phone_unit_ids: detail.units.map((unit) => unit.id),
+        journal_entry_id: existingJournal.data.id,
+        journal_reused: true,
+      },
+    });
+
+    return apiOk(responseData);
   }
 
   const inventoryAccount = await getAccountIdByCode(supabase, "1201");
@@ -215,6 +233,21 @@ export async function POST(request: Request, context: RouteContextWithId) {
   if (linkedReceipt.error) {
     return apiError("JOURNAL_LINK_FAILED", linkedReceipt.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "ACCEPT",
+    entity_table: "unit_receipts",
+    entity_id: id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: detail.receipt,
+    new_values: linkedReceipt.data,
+    metadata: {
+      phone_unit_ids: detail.units.map((unit) => unit.id),
+      journal_entry_id: journal.data.id,
+      total_unit_cost: totalUnitCost,
+    },
+  });
 
   return apiOk(linkedReceipt.data);
 }

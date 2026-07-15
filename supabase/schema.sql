@@ -749,6 +749,27 @@ create table if not exists public.journal_lines (
   )
 );
 
+create table if not exists public.audit_logs (
+  id uuid primary key default gen_random_uuid(),
+  event_time timestamptz not null default now(),
+  action varchar(30) not null,
+  entity_table varchar(80) not null,
+  entity_id uuid,
+  actor_user_id uuid,
+  actor_email varchar(255),
+  actor_role varchar(50),
+  reason text,
+  old_values jsonb,
+  new_values jsonb,
+  metadata jsonb,
+  request_path text,
+  request_method varchar(10),
+  created_at timestamptz not null default now(),
+  constraint audit_logs_action_allowed check (
+    action in ('CREATE', 'UPDATE', 'ACCEPT', 'REJECT', 'SALE', 'REVERSAL')
+  )
+);
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);
@@ -806,6 +827,10 @@ create index if not exists journal_entries_status_idx on public.journal_entries(
 create index if not exists journal_lines_journal_entry_id_idx on public.journal_lines(journal_entry_id);
 create index if not exists journal_lines_account_id_idx on public.journal_lines(account_id);
 create index if not exists journal_lines_phone_unit_id_idx on public.journal_lines(phone_unit_id);
+create index if not exists audit_logs_event_time_idx on public.audit_logs(event_time desc);
+create index if not exists audit_logs_action_idx on public.audit_logs(action);
+create index if not exists audit_logs_entity_idx on public.audit_logs(entity_table, entity_id);
+create index if not exists audit_logs_actor_user_id_idx on public.audit_logs(actor_user_id);
 
 create unique index if not exists phone_units_active_imei_1_unique_idx
 on public.phone_units (imei_1)
@@ -1075,6 +1100,7 @@ alter table public.operating_expenses enable row level security;
 alter table public.cash_adjustments enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
+alter table public.audit_logs enable row level security;
 
 drop policy if exists "Active brands are readable" on public.brands;
 create policy "Active brands are readable" on public.brands for select using (is_active = true);
@@ -1165,6 +1191,13 @@ create policy "Journal entries are readable" on public.journal_entries for selec
 
 drop policy if exists "Journal lines are readable" on public.journal_lines;
 create policy "Journal lines are readable" on public.journal_lines for select using (deleted_at is null);
+
+drop policy if exists "Audit logs are readable" on public.audit_logs;
+create policy "Audit logs are readable" on public.audit_logs
+for select using (
+  auth.role() = 'authenticated'
+  and upper(coalesce(auth.jwt() -> 'app_metadata' ->> 'role', auth.jwt() -> 'user_metadata' ->> 'role', '')) = 'OWNER'
+);
 
 insert into public.brands (code, name, sort_order)
 values

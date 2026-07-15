@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   getDateString,
@@ -192,6 +193,29 @@ export async function POST(request: Request, context: RouteContextWithId) {
   if (linkedCost.error) {
     return apiError("UNIT_COST_JOURNAL_LINK_FAILED", linkedCost.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "unit_costs",
+    entity_id: linkedCost.data.id,
+    reason: getOptionalString(body.audit_reason) ?? description,
+    old_values: {
+      unit: {
+        id: unit.id,
+        stock_code: unit.stock_code,
+        total_unit_cost: unit.total_unit_cost,
+      },
+    },
+    new_values: {
+      cost: linkedCost.data,
+      unit: unitUpdate.data,
+    },
+    metadata: {
+      phone_unit_id: id,
+      journal_entry_id: journal.data.id,
+    },
+  });
 
   return apiOk(
     {

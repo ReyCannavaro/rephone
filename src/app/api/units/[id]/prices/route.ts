@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   getNumber,
   getOptionalString,
@@ -100,6 +101,30 @@ export async function POST(request: Request, context: RouteContextWithId) {
 
     return apiError("UNIT_PRICE_UPDATE_FAILED", unitUpdate.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "UPDATE",
+    entity_table: "phone_units",
+    entity_id: id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.reason),
+    old_values: {
+      id: unit.id,
+      stock_code: unit.stock_code,
+      total_unit_cost: unit.total_unit_cost,
+      current_listing_price: unit.current_listing_price,
+      minimum_price: unit.minimum_price,
+    },
+    new_values: {
+      unit: unitUpdate.data,
+      price_history: historyResult.data,
+    },
+    metadata: {
+      unit_price_history_id: historyResult.data.id,
+      estimated_profit_at_listing: estimatedProfitAtListing,
+      estimated_profit_at_minimum: estimatedProfitAtMinimum,
+    },
+  });
 
   return apiOk(
     {

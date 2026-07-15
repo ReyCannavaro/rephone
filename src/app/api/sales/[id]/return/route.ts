@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import { createPostedJournal } from "@/lib/journals/journal-service";
 import {
   getDateString,
@@ -310,6 +311,31 @@ export async function POST(request: Request, context: RouteContextWithId) {
   if (originalJournalUpdate.error) {
     return apiError("SALE_JOURNAL_MARK_REVERSED_FAILED", originalJournalUpdate.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "REVERSAL",
+    entity_table: "sale_returns",
+    entity_id: linkedReturn.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.reason),
+    old_values: {
+      sale,
+      units,
+      journal: saleJournal,
+    },
+    new_values: {
+      sale: saleUpdate.data,
+      return: linkedReturn.data,
+      journal: reversalJournal.data,
+      target_stock_status: targetStockStatus,
+    },
+    metadata: {
+      sale_id: id,
+      reversed_journal_entry_id: saleJournal.id,
+      reversal_journal_entry_id: reversalJournal.data.id,
+      phone_unit_ids: unitIds,
+    },
+  });
 
   return apiOk({
     sale: saleUpdate.data,

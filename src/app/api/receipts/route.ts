@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   generateReceiptNumber,
   generateStockCode,
@@ -262,6 +263,20 @@ export async function POST(request: Request) {
       return apiError("PHOTOS_CREATE_FAILED", error.message, 500);
     }
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "unit_receipts",
+    entity_id: receipt.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    new_values: { receipt, unit: createdUnit },
+    metadata: {
+      phone_unit_id: createdUnit.id,
+      accessory_count: accessoryRows.length,
+      photo_count: photoRows.length,
+    },
+  });
 
   return apiOk({ receipt, unit: createdUnit }, { status: 201 });
 }

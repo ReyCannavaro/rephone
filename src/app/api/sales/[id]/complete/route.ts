@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import { createPostedJournal, getAccountIdByCode } from "@/lib/journals/journal-service";
 import {
   getOptionalString,
@@ -272,6 +273,21 @@ export async function POST(request: Request, context: RouteContextWithId) {
       return apiError("SALE_JOURNAL_LINK_FAILED", linkedSale.error.message, 500);
     }
 
+    await writeAuditLog(supabase, {
+      request,
+      action: "SALE",
+      entity_table: "sales",
+      entity_id: id,
+      reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+      old_values: sale,
+      new_values: linkedSale.data,
+      metadata: {
+        journal_entry_id: existingJournal.data.id,
+        journal_reused: true,
+        phone_unit_ids: units.map((unit) => unit.id),
+      },
+    });
+
     return apiOk({ sale: linkedSale.data, journal_entry_id: existingJournal.data.id });
   }
 
@@ -353,6 +369,22 @@ export async function POST(request: Request, context: RouteContextWithId) {
   if (linkedSale.error) {
     return apiError("SALE_JOURNAL_LINK_FAILED", linkedSale.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "SALE",
+    entity_table: "sales",
+    entity_id: id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: sale,
+    new_values: linkedSale.data,
+    metadata: {
+      journal_entry_id: journal.data.id,
+      phone_unit_ids: units.map((unit) => unit.id),
+      total_net_amount: totals.total_net_amount,
+      total_profit_amount: totals.total_profit_amount,
+    },
+  });
 
   return apiOk({
     sale: linkedSale.data,

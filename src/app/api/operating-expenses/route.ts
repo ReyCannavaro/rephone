@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureSufficientCashBalance,
   generateFinanceNumber,
@@ -173,6 +174,25 @@ export async function POST(request: Request) {
   if (linkedExpense.error) {
     return apiError("OPERATING_EXPENSE_JOURNAL_LINK_FAILED", linkedExpense.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "operating_expenses",
+    entity_id: linkedExpense.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    new_values: {
+      expense: linkedExpense.data,
+      journal: journal.data,
+      balance_before: balance.data,
+    },
+    metadata: {
+      journal_entry_id: journal.data.id,
+      payment_account_id: paymentAccountId,
+      expense_account_id: expenseAccountId,
+      amount,
+    },
+  });
 
   return apiOk(
     {

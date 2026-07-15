@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   generateFinanceNumber,
   getActiveAccountByCode,
@@ -122,6 +123,23 @@ export async function POST(request: Request) {
   if (linkedContribution.error) {
     return apiError("CAPITAL_JOURNAL_LINK_FAILED", linkedContribution.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "capital_contributions",
+    entity_id: linkedContribution.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    new_values: {
+      contribution: linkedContribution.data,
+      journal: journal.data,
+    },
+    metadata: {
+      journal_entry_id: journal.data.id,
+      account_id: accountId,
+      amount,
+    },
+  });
 
   return apiOk({ contribution: linkedContribution.data, journal: journal.data }, { status: 201 });
 }

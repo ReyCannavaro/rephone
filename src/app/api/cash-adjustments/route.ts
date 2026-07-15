@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureSufficientCashBalance,
   generateFinanceNumber,
@@ -177,6 +178,25 @@ export async function POST(request: Request) {
   if (linkedAdjustment.error) {
     return apiError("CASH_ADJUSTMENT_JOURNAL_LINK_FAILED", linkedAdjustment.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "cash_adjustments",
+    entity_id: linkedAdjustment.data.id,
+    reason: getOptionalString(body.audit_reason) ?? reason,
+    new_values: {
+      adjustment: linkedAdjustment.data,
+      journal: journal.data,
+      balance_before: balanceBefore,
+    },
+    metadata: {
+      journal_entry_id: journal.data.id,
+      account_id: accountId,
+      adjustment_type: adjustmentType,
+      amount,
+    },
+  });
 
   return apiOk(
     {

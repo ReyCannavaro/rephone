@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   ensureSufficientCashBalance,
   generateFinanceNumber,
@@ -131,6 +132,24 @@ export async function POST(request: Request) {
   if (linkedDrawing.error) {
     return apiError("OWNER_DRAWING_JOURNAL_LINK_FAILED", linkedDrawing.error.message, 500);
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "owner_drawings",
+    entity_id: linkedDrawing.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    new_values: {
+      drawing: linkedDrawing.data,
+      journal: journal.data,
+      balance_before: balance.data,
+    },
+    metadata: {
+      journal_entry_id: journal.data.id,
+      account_id: accountId,
+      amount,
+    },
+  });
 
   return apiOk(
     {

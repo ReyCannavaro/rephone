@@ -1,4 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
+import { writeAuditLog } from "@/lib/audit/audit-service";
 import {
   getDateString,
   getNumber,
@@ -303,6 +304,31 @@ export async function POST(request: Request) {
 
     saleCosts = saleCostsResult.data ?? [];
   }
+
+  await writeAuditLog(supabase, {
+    request,
+    action: "CREATE",
+    entity_table: "sales",
+    entity_id: saleResult.data.id,
+    reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
+    old_values: {
+      unit: {
+        id: unit.id,
+        stock_code: unit.stock_code,
+        stock_status: unit.stock_status,
+      },
+    },
+    new_values: {
+      sale: saleResult.data,
+      item: saleItemResult.data,
+      costs: saleCosts,
+    },
+    metadata: {
+      phone_unit_id: phoneUnitId,
+      total_net_amount: totals.total_net_amount,
+      total_profit_amount: totals.total_profit_amount,
+    },
+  });
 
   return apiOk(
     {
