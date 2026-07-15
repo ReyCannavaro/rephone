@@ -6,7 +6,6 @@ import {
   getActiveAccount,
   getActiveCashAccount,
 } from "@/lib/finance/finance-service";
-import { createPostedJournal } from "@/lib/journals/journal-service";
 import {
   getDateString,
   getNumber,
@@ -128,66 +127,31 @@ export async function POST(request: Request) {
     proof_filename: getOptionalString(body.proof_filename),
     notes: getOptionalString(body.notes),
   };
-  const expenseResult = await supabase.from("operating_expenses").insert(payload).select().single();
-
-  if (expenseResult.error) {
-    return apiError("OPERATING_EXPENSE_CREATE_FAILED", expenseResult.error.message, 500);
-  }
-
-  const journal = await createPostedJournal(supabase, {
-    transaction_date: expenseDate,
-    source_module: "OPERATING_EXPENSE",
-    source_id: expenseResult.data.id,
-    description: `Beban operasional ${expenseResult.data.expense_number}: ${description}`,
-    lines: [
-      {
-        account_id: expenseAccountId,
-        description,
-        debit: amount,
-        credit: 0,
-      },
-      {
-        account_id: paymentAccountId,
-        description: `Pembayaran ${description}`,
-        debit: 0,
-        credit: amount,
-      },
-    ],
+  const expenseResult = await supabase.rpc("rpc_create_operating_expense", {
+    p_expense: payload,
   });
 
-  if (journal.error || !journal.data) {
-    await supabase
-      .from("operating_expenses")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", expenseResult.data.id);
-
-    return apiError("OPERATING_EXPENSE_JOURNAL_CREATE_FAILED", journal.error ?? "Journal was not created.", 500);
+  if (expenseResult.error) {
+    return apiError("OPERATING_EXPENSE_RPC_FAILED", expenseResult.error.message, 500);
   }
 
-  const linkedExpense = await supabase
-    .from("operating_expenses")
-    .update({ journal_entry_id: journal.data.id, updated_at: new Date().toISOString() })
-    .eq("id", expenseResult.data.id)
-    .select()
-    .single();
-
-  if (linkedExpense.error) {
-    return apiError("OPERATING_EXPENSE_JOURNAL_LINK_FAILED", linkedExpense.error.message, 500);
-  }
+  const expenseData = expenseResult.data as {
+    expense: Database["public"]["Tables"]["operating_expenses"]["Row"];
+    journal_entry_id: string;
+  };
 
   await writeAuditLog(supabase, {
     request,
     action: "CREATE",
     entity_table: "operating_expenses",
-    entity_id: linkedExpense.data.id,
+    entity_id: expenseData.expense.id,
     reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.notes),
     new_values: {
-      expense: linkedExpense.data,
-      journal: journal.data,
+      expense: expenseData.expense,
       balance_before: balance.data,
     },
     metadata: {
-      journal_entry_id: journal.data.id,
+      journal_entry_id: expenseData.journal_entry_id,
       payment_account_id: paymentAccountId,
       expense_account_id: expenseAccountId,
       amount,
@@ -196,8 +160,8 @@ export async function POST(request: Request) {
 
   return apiOk(
     {
-      expense: linkedExpense.data,
-      journal: journal.data,
+      expense: expenseData.expense,
+      journal_entry_id: expenseData.journal_entry_id,
       balance_before: balance.data,
     },
     { status: 201 },

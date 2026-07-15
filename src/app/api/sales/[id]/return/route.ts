@@ -1,6 +1,5 @@
 import { apiError, apiOk } from "@/lib/api/responses";
 import { writeAuditLog } from "@/lib/audit/audit-service";
-import { createPostedJournal } from "@/lib/journals/journal-service";
 import {
   getDateString,
   getNumber,
@@ -18,11 +17,6 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Database } from "@/lib/supabase/database.types";
 
 export const runtime = "nodejs";
-
-type PhoneUnitSnapshot = Pick<
-  Database["public"]["Tables"]["phone_units"]["Row"],
-  "id" | "stock_status" | "sold_at"
->;
 
 export async function POST(request: Request, context: RouteContextWithId) {
   const { id } = await context.params;
@@ -201,122 +195,54 @@ export async function POST(request: Request, context: RouteContextWithId) {
   }
 
   const now = new Date().toISOString();
-  const returnResult = await supabase
-    .from("sale_returns")
-    .insert({
-      return_number: getOptionalString(body.return_number) ?? generateSaleReturnNumber(),
-      sale_id: id,
-      return_date: returnDate,
-      status: "COMPLETED",
-      target_stock_status: targetStockStatus,
-      return_reason_code: getOptionalString(body.return_reason_code),
-      return_notes: getOptionalString(body.return_notes),
-      refund_amount: refundAmount,
-      refund_account_id: refundAccountId,
-      refund_reference: refundReference,
-      refund_proof_url: refundProofUrl,
-      refund_proof_filename: getOptionalString(body.refund_proof_filename),
-      refund_recorded_at: getOptionalString(body.refund_recorded_at) ?? (refundAmount > 0 ? now : null),
-      reversed_sale_journal_entry_id: saleJournal.id,
-      completed_at: now,
-      notes: getOptionalString(body.notes),
-    })
-    .select()
-    .single();
-
-  if (returnResult.error) {
-    return apiError("SALE_RETURN_CREATE_FAILED", returnResult.error.message, 500);
-  }
-
-  const reversalJournal = await createPostedJournal(supabase, {
-    transaction_date: returnDate,
-    source_module: "SALE_RETURN",
-    source_id: returnResult.data.id,
-    description: `Retur penjualan ${sale.sale_number}`,
-    reversed_entry_id: saleJournal.id,
-    lines: saleJournalLines.map((line) => ({
-      account_id: line.account_id,
-      description: `Pembalik: ${line.description ?? saleJournal.description}`,
-      debit: line.credit,
-      credit: line.debit,
-      phone_unit_id: line.phone_unit_id,
-      seller_id: line.seller_id,
-      customer_id: line.customer_id,
-    })),
+  const returnPayload = {
+    return_number: getOptionalString(body.return_number) ?? generateSaleReturnNumber(),
+    return_date: returnDate,
+    return_reason_code: getOptionalString(body.return_reason_code),
+    return_notes: getOptionalString(body.return_notes),
+    refund_amount: refundAmount,
+    refund_account_id: refundAccountId,
+    refund_reference: refundReference,
+    refund_proof_url: refundProofUrl,
+    refund_proof_filename: getOptionalString(body.refund_proof_filename),
+    refund_recorded_at: getOptionalString(body.refund_recorded_at) ?? (refundAmount > 0 ? now : null),
+    completed_at: now,
+    notes: getOptionalString(body.notes),
+  };
+  const reversalLines = saleJournalLines.map((line) => ({
+    account_id: line.account_id,
+    description: `Pembalik: ${line.description ?? saleJournal.description}`,
+    debit: line.credit,
+    credit: line.debit,
+    phone_unit_id: line.phone_unit_id,
+    seller_id: line.seller_id,
+    customer_id: line.customer_id,
+  }));
+  const returnResult = await supabase.rpc("rpc_return_sale", {
+    p_sale_id: id,
+    p_sale_return: returnPayload,
+    p_unit_ids: unitIds,
+    p_target_stock_status: targetStockStatus,
+    p_reversal_lines: reversalLines,
+    p_reversed_journal_entry_id: saleJournal.id,
   });
 
-  if (reversalJournal.error || !reversalJournal.data) {
-    await softDeleteSaleReturn(supabase, returnResult.data.id);
-
-    return apiError("SALE_RETURN_JOURNAL_CREATE_FAILED", reversalJournal.error ?? "Journal was not created.", 500);
+  if (returnResult.error) {
+    return apiError("SALE_RETURN_RPC_FAILED", returnResult.error.message, 500);
   }
 
-  const linkedReturn = await supabase
-    .from("sale_returns")
-    .update({ journal_entry_id: reversalJournal.data.id, updated_at: new Date().toISOString() })
-    .eq("id", returnResult.data.id)
-    .select()
-    .single();
-
-  if (linkedReturn.error) {
-    await softDeleteSaleReturn(supabase, returnResult.data.id);
-    await softDeleteJournal(supabase, reversalJournal.data.id);
-
-    return apiError("SALE_RETURN_JOURNAL_LINK_FAILED", linkedReturn.error.message, 500);
-  }
-
-  const unitUpdate = await supabase
-    .from("phone_units")
-    .update({
-      stock_status: targetStockStatus,
-      sold_at: null,
-      updated_at: new Date().toISOString(),
-    })
-    .in("id", unitIds)
-    .eq("stock_status", "SOLD")
-    .select("id");
-
-  if (unitUpdate.error || (unitUpdate.data ?? []).length !== unitIds.length) {
-    await softDeleteSaleReturn(supabase, returnResult.data.id);
-    await softDeleteJournal(supabase, reversalJournal.data.id);
-    await restoreUnitSnapshots(supabase, units);
-
-    return apiError(
-      "SALE_RETURN_UNIT_UPDATE_FAILED",
-      unitUpdate.error?.message ?? "One or more sold units could not be restored.",
-      500,
-    );
-  }
-
-  const saleUpdate = await supabase
-    .from("sales")
-    .update({ status: "RETURNED", updated_at: new Date().toISOString() })
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (saleUpdate.error) {
-    await softDeleteSaleReturn(supabase, returnResult.data.id);
-    await softDeleteJournal(supabase, reversalJournal.data.id);
-    await restoreUnitSnapshots(supabase, units);
-
-    return apiError("SALE_RETURN_STATUS_UPDATE_FAILED", saleUpdate.error.message, 500);
-  }
-
-  const originalJournalUpdate = await supabase
-    .from("journal_entries")
-    .update({ status: "REVERSED", updated_at: new Date().toISOString() })
-    .eq("id", saleJournal.id);
-
-  if (originalJournalUpdate.error) {
-    return apiError("SALE_JOURNAL_MARK_REVERSED_FAILED", originalJournalUpdate.error.message, 500);
-  }
+  const returnData = returnResult.data as {
+    sale: Database["public"]["Tables"]["sales"]["Row"];
+    return: Database["public"]["Tables"]["sale_returns"]["Row"];
+    journal_entry_id: string;
+    target_stock_status: SaleReturnTargetStockStatus;
+  };
 
   await writeAuditLog(supabase, {
     request,
     action: "REVERSAL",
     entity_table: "sale_returns",
-    entity_id: linkedReturn.data.id,
+    entity_id: returnData.return.id,
     reason: getOptionalString(body.audit_reason) ?? getOptionalString(body.reason),
     old_values: {
       sale,
@@ -324,24 +250,23 @@ export async function POST(request: Request, context: RouteContextWithId) {
       journal: saleJournal,
     },
     new_values: {
-      sale: saleUpdate.data,
-      return: linkedReturn.data,
-      journal: reversalJournal.data,
-      target_stock_status: targetStockStatus,
+      sale: returnData.sale,
+      return: returnData.return,
+      target_stock_status: returnData.target_stock_status,
     },
     metadata: {
       sale_id: id,
       reversed_journal_entry_id: saleJournal.id,
-      reversal_journal_entry_id: reversalJournal.data.id,
+      reversal_journal_entry_id: returnData.journal_entry_id,
       phone_unit_ids: unitIds,
     },
   });
 
   return apiOk({
-    sale: saleUpdate.data,
-    return: linkedReturn.data,
-    journal: reversalJournal.data,
-    target_stock_status: targetStockStatus,
+    sale: returnData.sale,
+    return: returnData.return,
+    journal_entry_id: returnData.journal_entry_id,
+    target_stock_status: returnData.target_stock_status,
   });
 }
 
@@ -355,40 +280,4 @@ function getReturnTargetStockStatus(value: unknown) {
   return saleReturnTargetStockStatuses.includes(status as SaleReturnTargetStockStatus)
     ? (status as SaleReturnTargetStockStatus)
     : null;
-}
-
-async function softDeleteSaleReturn(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  saleReturnId: string,
-) {
-  await supabase
-    .from("sale_returns")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", saleReturnId);
-}
-
-async function softDeleteJournal(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  journalEntryId: string,
-) {
-  await supabase
-    .from("journal_entries")
-    .update({ deleted_at: new Date().toISOString(), status: "REVERSED" })
-    .eq("id", journalEntryId);
-}
-
-async function restoreUnitSnapshots(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  units: PhoneUnitSnapshot[],
-) {
-  for (const unit of units) {
-    await supabase
-      .from("phone_units")
-      .update({
-        stock_status: unit.stock_status,
-        sold_at: unit.sold_at,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", unit.id);
-  }
 }

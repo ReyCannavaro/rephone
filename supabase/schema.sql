@@ -770,6 +770,585 @@ create table if not exists public.audit_logs (
   )
 );
 
+create or replace function public.rpc_create_posted_journal(
+  p_transaction_date date,
+  p_source_module varchar,
+  p_source_id uuid,
+  p_description text,
+  p_lines jsonb,
+  p_reversed_entry_id uuid default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_entry_id uuid;
+  v_total_debit numeric(18,2);
+  v_total_credit numeric(18,2);
+  v_line_count integer;
+begin
+  select
+    count(*),
+    coalesce(round(sum(coalesce((line ->> 'debit')::numeric, 0)), 2), 0),
+    coalesce(round(sum(coalesce((line ->> 'credit')::numeric, 0)), 2), 0)
+  into v_line_count, v_total_debit, v_total_credit
+  from jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) as line;
+
+  if v_line_count < 2 then
+    raise exception 'Journal must have at least two lines.';
+  end if;
+
+  if v_total_debit <> v_total_credit then
+    raise exception 'Journal is not balanced.';
+  end if;
+
+  insert into public.journal_entries (
+    journal_number,
+    transaction_date,
+    source_module,
+    source_id,
+    description,
+    status,
+    total_debit,
+    total_credit,
+    posted_at,
+    reversed_entry_id
+  )
+  values (
+    'JRN-' || left(p_source_module, 8) || '-' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISS') || '-' ||
+      lpad(floor(random() * 10000)::text, 4, '0'),
+    p_transaction_date,
+    p_source_module,
+    p_source_id,
+    p_description,
+    'POSTED',
+    v_total_debit,
+    v_total_credit,
+    now(),
+    p_reversed_entry_id
+  )
+  returning id into v_entry_id;
+
+  insert into public.journal_lines (
+    journal_entry_id,
+    account_id,
+    description,
+    debit,
+    credit,
+    phone_unit_id,
+    seller_id,
+    customer_id
+  )
+  select
+    v_entry_id,
+    line.account_id,
+    line.description,
+    coalesce(line.debit, 0),
+    coalesce(line.credit, 0),
+    line.phone_unit_id,
+    line.seller_id,
+    line.customer_id
+  from jsonb_to_recordset(p_lines) as line(
+    account_id uuid,
+    description text,
+    debit numeric,
+    credit numeric,
+    phone_unit_id uuid,
+    seller_id uuid,
+    customer_id uuid
+  );
+
+  return v_entry_id;
+end;
+$$;
+
+create or replace function public.rpc_accept_receipt(
+  p_receipt_id uuid,
+  p_purchase_account_id uuid,
+  p_purchase_payment_reference text,
+  p_purchase_payment_proof_url text,
+  p_purchase_payment_proof_filename text,
+  p_purchase_payment_proof_recorded_at timestamptz,
+  p_photo_drive_url text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_receipt public.unit_receipts%rowtype;
+  v_inventory_account_id uuid;
+  v_journal_id uuid;
+  v_total_purchase numeric(18,2);
+  v_total_direct numeric(18,2);
+  v_total_unit numeric(18,2);
+  v_lines jsonb;
+begin
+  select * into v_receipt
+  from public.unit_receipts
+  where id = p_receipt_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Receipt was not found.';
+  end if;
+
+  if v_receipt.status in ('ACCEPTED', 'REJECTED') then
+    raise exception 'Receipt with status % cannot be accepted.', v_receipt.status;
+  end if;
+
+  select
+    coalesce(sum(purchase_price), 0),
+    coalesce(sum(purchase_transfer_fee), 0),
+    coalesce(sum(total_unit_cost), 0)
+  into v_total_purchase, v_total_direct, v_total_unit
+  from public.phone_units
+  where receipt_id = p_receipt_id and deleted_at is null;
+
+  if v_total_purchase <= 0 then
+    raise exception 'Receipt cannot be accepted without unit purchase amount.';
+  end if;
+
+  update public.unit_receipts
+  set
+    status = 'ACCEPTED',
+    decision_at = now(),
+    purchase_account_id = p_purchase_account_id,
+    purchase_payment_reference = p_purchase_payment_reference,
+    purchase_payment_proof_url = p_purchase_payment_proof_url,
+    purchase_payment_proof_filename = p_purchase_payment_proof_filename,
+    purchase_payment_proof_recorded_at = coalesce(p_purchase_payment_proof_recorded_at, now()),
+    photo_drive_url = p_photo_drive_url,
+    total_purchase_amount = v_total_purchase,
+    total_direct_cost = v_total_direct,
+    total_unit_cost = v_total_unit,
+    updated_at = now()
+  where id = p_receipt_id
+  returning * into v_receipt;
+
+  update public.phone_units
+  set stock_status = 'IN_STOCK', photo_drive_url = p_photo_drive_url, acquired_at = v_receipt.receipt_date, updated_at = now()
+  where receipt_id = p_receipt_id and stock_status in ('DRAFT', 'INSPECTION') and deleted_at is null;
+
+  select id into v_journal_id
+  from public.journal_entries
+  where source_module = 'RECEIPT' and source_id = p_receipt_id and deleted_at is null
+  limit 1;
+
+  if v_journal_id is null then
+    select id into v_inventory_account_id
+    from public.accounts
+    where account_code = '1201' and is_active = true;
+
+    if v_inventory_account_id is null then
+      raise exception 'Inventory account 1201 is not configured.';
+    end if;
+
+    select jsonb_agg(line)
+    into v_lines
+    from (
+      select
+        v_inventory_account_id as account_id,
+        ('Persediaan ' || stock_code) as description,
+        total_unit_cost as debit,
+        0::numeric as credit,
+        id as phone_unit_id,
+        v_receipt.seller_id as seller_id,
+        null::uuid as customer_id
+      from public.phone_units
+      where receipt_id = p_receipt_id and deleted_at is null
+      union all
+      select
+        p_purchase_account_id,
+        ('Pembayaran pembelian ' || v_receipt.receipt_number),
+        0::numeric,
+        v_total_unit,
+        null::uuid,
+        v_receipt.seller_id,
+        null::uuid
+    ) as line;
+
+    v_journal_id := public.rpc_create_posted_journal(
+      v_receipt.receipt_date,
+      'RECEIPT',
+      p_receipt_id,
+      'Penerimaan unit ' || v_receipt.receipt_number,
+      v_lines,
+      null
+    );
+  end if;
+
+  update public.unit_receipts
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = p_receipt_id
+  returning * into v_receipt;
+
+  return jsonb_build_object(
+    'receipt', to_jsonb(v_receipt),
+    'journal_entry_id', v_journal_id
+  );
+end;
+$$;
+
+create or replace function public.rpc_add_unit_cost(
+  p_phone_unit_id uuid,
+  p_cost jsonb,
+  p_inventory_account_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_unit public.phone_units%rowtype;
+  v_cost public.unit_costs%rowtype;
+  v_journal_id uuid;
+  v_amount numeric(18,2);
+begin
+  select * into v_unit
+  from public.phone_units
+  where id = p_phone_unit_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Unit was not found.';
+  end if;
+
+  if v_unit.stock_status in ('SOLD', 'REJECTED', 'LOST', 'WRITTEN_OFF') then
+    raise exception 'Cannot add cost for unit with status %.', v_unit.stock_status;
+  end if;
+
+  v_amount := (p_cost ->> 'amount')::numeric;
+
+  insert into public.unit_costs (
+    cost_number,
+    phone_unit_id,
+    cost_category_id,
+    cost_date,
+    description,
+    amount,
+    payment_account_id,
+    is_paid,
+    proof_url,
+    proof_filename,
+    notes
+  )
+  values (
+    p_cost ->> 'cost_number',
+    p_phone_unit_id,
+    (p_cost ->> 'cost_category_id')::uuid,
+    (p_cost ->> 'cost_date')::date,
+    p_cost ->> 'description',
+    v_amount,
+    (p_cost ->> 'payment_account_id')::uuid,
+    coalesce((p_cost ->> 'is_paid')::boolean, true),
+    p_cost ->> 'proof_url',
+    p_cost ->> 'proof_filename',
+    p_cost ->> 'notes'
+  )
+  returning * into v_cost;
+
+  update public.phone_units
+  set total_unit_cost = round(total_unit_cost + v_amount, 2), updated_at = now()
+  where id = p_phone_unit_id
+  returning * into v_unit;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_cost.cost_date,
+    'UNIT_COST',
+    v_cost.id,
+    'Biaya unit ' || v_unit.stock_code || ': ' || v_cost.description,
+    jsonb_build_array(
+      jsonb_build_object('account_id', p_inventory_account_id, 'description', v_cost.description, 'debit', v_amount, 'credit', 0, 'phone_unit_id', p_phone_unit_id),
+      jsonb_build_object('account_id', v_cost.payment_account_id, 'description', v_cost.description, 'debit', 0, 'credit', v_amount, 'phone_unit_id', p_phone_unit_id)
+    ),
+    null
+  );
+
+  update public.unit_costs
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_cost.id
+  returning * into v_cost;
+
+  return jsonb_build_object(
+    'cost', to_jsonb(v_cost),
+    'unit', jsonb_build_object('id', v_unit.id, 'stock_code', v_unit.stock_code, 'total_unit_cost', v_unit.total_unit_cost),
+    'journal_entry_id', v_journal_id
+  );
+end;
+$$;
+
+create or replace function public.rpc_complete_sale(
+  p_sale_id uuid,
+  p_sale_update jsonb,
+  p_unit_ids uuid[],
+  p_journal_lines jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sale public.sales%rowtype;
+  v_journal_id uuid;
+  v_updated_count integer;
+begin
+  select * into v_sale
+  from public.sales
+  where id = p_sale_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Sale was not found.';
+  end if;
+
+  if v_sale.status = 'COMPLETED' then
+    return jsonb_build_object('sale', to_jsonb(v_sale), 'journal_entry_id', v_sale.journal_entry_id, 'journal_reused', true);
+  end if;
+
+  if v_sale.status <> 'DRAFT' then
+    raise exception 'Sale with status % cannot be completed.', v_sale.status;
+  end if;
+
+  update public.sales
+  set
+    status = 'COMPLETED',
+    payment_account_id = (p_sale_update ->> 'payment_account_id')::uuid,
+    payment_method = p_sale_update ->> 'payment_method',
+    payment_reference = p_sale_update ->> 'payment_reference',
+    payment_proof_url = p_sale_update ->> 'payment_proof_url',
+    payment_proof_filename = p_sale_update ->> 'payment_proof_filename',
+    payment_proof_recorded_at = (p_sale_update ->> 'payment_proof_recorded_at')::timestamptz,
+    completed_at = (p_sale_update ->> 'completed_at')::timestamptz,
+    subtotal_amount = (p_sale_update ->> 'subtotal_amount')::numeric,
+    total_sales_cost = (p_sale_update ->> 'total_sales_cost')::numeric,
+    total_net_amount = (p_sale_update ->> 'total_net_amount')::numeric,
+    total_cogs_amount = (p_sale_update ->> 'total_cogs_amount')::numeric,
+    total_profit_amount = (p_sale_update ->> 'total_profit_amount')::numeric,
+    updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  update public.phone_units
+  set stock_status = 'SOLD', sold_at = v_sale.completed_at, updated_at = now()
+  where id = any(p_unit_ids)
+    and stock_status in ('IN_STOCK', 'RESERVED')
+    and deleted_at is null;
+
+  get diagnostics v_updated_count = row_count;
+
+  if v_updated_count <> cardinality(p_unit_ids) then
+    raise exception 'One or more units could not be marked as SOLD.';
+  end if;
+
+  select id into v_journal_id
+  from public.journal_entries
+  where source_module = 'SALE' and source_id = p_sale_id and deleted_at is null
+  limit 1;
+
+  if v_journal_id is null then
+    v_journal_id := public.rpc_create_posted_journal(
+      v_sale.sale_date,
+      'SALE',
+      p_sale_id,
+      'Penjualan unit ' || v_sale.sale_number,
+      p_journal_lines,
+      null
+    );
+  end if;
+
+  update public.sales
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  return jsonb_build_object('sale', to_jsonb(v_sale), 'journal_entry_id', v_journal_id);
+end;
+$$;
+
+create or replace function public.rpc_return_sale(
+  p_sale_id uuid,
+  p_sale_return jsonb,
+  p_unit_ids uuid[],
+  p_target_stock_status varchar,
+  p_reversal_lines jsonb,
+  p_reversed_journal_entry_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_sale public.sales%rowtype;
+  v_return public.sale_returns%rowtype;
+  v_journal_id uuid;
+  v_updated_count integer;
+begin
+  select * into v_sale
+  from public.sales
+  where id = p_sale_id and deleted_at is null
+  for update;
+
+  if not found then
+    raise exception 'Sale was not found.';
+  end if;
+
+  if v_sale.status <> 'COMPLETED' then
+    raise exception 'Only COMPLETED sales can be returned.';
+  end if;
+
+  insert into public.sale_returns (
+    return_number,
+    sale_id,
+    return_date,
+    status,
+    target_stock_status,
+    return_reason_code,
+    return_notes,
+    refund_amount,
+    refund_account_id,
+    refund_reference,
+    refund_proof_url,
+    refund_proof_filename,
+    refund_recorded_at,
+    reversed_sale_journal_entry_id,
+    completed_at,
+    notes
+  )
+  values (
+    p_sale_return ->> 'return_number',
+    p_sale_id,
+    (p_sale_return ->> 'return_date')::date,
+    'COMPLETED',
+    p_target_stock_status,
+    p_sale_return ->> 'return_reason_code',
+    p_sale_return ->> 'return_notes',
+    coalesce((p_sale_return ->> 'refund_amount')::numeric, 0),
+    nullif(p_sale_return ->> 'refund_account_id', '')::uuid,
+    p_sale_return ->> 'refund_reference',
+    p_sale_return ->> 'refund_proof_url',
+    p_sale_return ->> 'refund_proof_filename',
+    nullif(p_sale_return ->> 'refund_recorded_at', '')::timestamptz,
+    p_reversed_journal_entry_id,
+    (p_sale_return ->> 'completed_at')::timestamptz,
+    p_sale_return ->> 'notes'
+  )
+  returning * into v_return;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_return.return_date,
+    'SALE_RETURN',
+    v_return.id,
+    'Retur penjualan ' || v_sale.sale_number,
+    p_reversal_lines,
+    p_reversed_journal_entry_id
+  );
+
+  update public.sale_returns
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_return.id
+  returning * into v_return;
+
+  update public.phone_units
+  set stock_status = p_target_stock_status, sold_at = null, updated_at = now()
+  where id = any(p_unit_ids)
+    and stock_status = 'SOLD'
+    and deleted_at is null;
+
+  get diagnostics v_updated_count = row_count;
+
+  if v_updated_count <> cardinality(p_unit_ids) then
+    raise exception 'One or more sold units could not be restored.';
+  end if;
+
+  update public.sales
+  set status = 'RETURNED', updated_at = now()
+  where id = p_sale_id
+  returning * into v_sale;
+
+  update public.journal_entries
+  set status = 'REVERSED', updated_at = now()
+  where id = p_reversed_journal_entry_id;
+
+  return jsonb_build_object(
+    'sale', to_jsonb(v_sale),
+    'return', to_jsonb(v_return),
+    'journal_entry_id', v_journal_id,
+    'target_stock_status', p_target_stock_status
+  );
+end;
+$$;
+
+create or replace function public.rpc_create_operating_expense(
+  p_expense jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_expense public.operating_expenses%rowtype;
+  v_journal_id uuid;
+  v_amount numeric(18,2);
+begin
+  v_amount := (p_expense ->> 'amount')::numeric;
+
+  insert into public.operating_expenses (
+    expense_number,
+    expense_date,
+    cost_category_id,
+    expense_account_id,
+    payment_account_id,
+    description,
+    amount,
+    reference,
+    proof_url,
+    proof_filename,
+    notes
+  )
+  values (
+    p_expense ->> 'expense_number',
+    (p_expense ->> 'expense_date')::date,
+    nullif(p_expense ->> 'cost_category_id', '')::uuid,
+    (p_expense ->> 'expense_account_id')::uuid,
+    (p_expense ->> 'payment_account_id')::uuid,
+    p_expense ->> 'description',
+    v_amount,
+    p_expense ->> 'reference',
+    p_expense ->> 'proof_url',
+    p_expense ->> 'proof_filename',
+    p_expense ->> 'notes'
+  )
+  returning * into v_expense;
+
+  v_journal_id := public.rpc_create_posted_journal(
+    v_expense.expense_date,
+    'OPERATING_EXPENSE',
+    v_expense.id,
+    'Beban operasional ' || v_expense.expense_number || ': ' || v_expense.description,
+    jsonb_build_array(
+      jsonb_build_object('account_id', v_expense.expense_account_id, 'description', v_expense.description, 'debit', v_amount, 'credit', 0),
+      jsonb_build_object('account_id', v_expense.payment_account_id, 'description', 'Pembayaran ' || v_expense.description, 'debit', 0, 'credit', v_amount)
+    ),
+    null
+  );
+
+  update public.operating_expenses
+  set journal_entry_id = v_journal_id, updated_at = now()
+  where id = v_expense.id
+  returning * into v_expense;
+
+  return jsonb_build_object('expense', to_jsonb(v_expense), 'journal_entry_id', v_journal_id);
+end;
+$$;
+
 create index if not exists phone_models_brand_id_idx on public.phone_models(brand_id);
 create index if not exists colors_brand_id_idx on public.colors(brand_id);
 create index if not exists inspection_items_category_idx on public.inspection_items(category);

@@ -856,7 +856,54 @@ export type Database = {
       >;
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      rpc_accept_receipt: {
+        Args: {
+          p_receipt_id: string;
+          p_purchase_account_id: string;
+          p_purchase_payment_reference: string;
+          p_purchase_payment_proof_url: string;
+          p_purchase_payment_proof_filename: string | null;
+          p_purchase_payment_proof_recorded_at: string | null;
+          p_photo_drive_url: string;
+        };
+        Returns: Json;
+      };
+      rpc_add_unit_cost: {
+        Args: {
+          p_phone_unit_id: string;
+          p_cost: Json;
+          p_inventory_account_id: string;
+        };
+        Returns: Json;
+      };
+      rpc_complete_sale: {
+        Args: {
+          p_sale_id: string;
+          p_sale_update: Json;
+          p_unit_ids: string[];
+          p_journal_lines: Json;
+        };
+        Returns: Json;
+      };
+      rpc_return_sale: {
+        Args: {
+          p_sale_id: string;
+          p_sale_return: Json;
+          p_unit_ids: string[];
+          p_target_stock_status: string;
+          p_reversal_lines: Json;
+          p_reversed_journal_entry_id: string;
+        };
+        Returns: Json;
+      };
+      rpc_create_operating_expense: {
+        Args: {
+          p_expense: Json;
+        };
+        Returns: Json;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
