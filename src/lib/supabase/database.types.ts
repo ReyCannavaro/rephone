@@ -78,6 +78,8 @@ type UnitPhotoType =
   | "OTHER";
 type SaleStatus = "DRAFT" | "COMPLETED" | "CANCELLED" | "RETURNED";
 type SalePaymentMethod = "CASH" | "TRANSFER" | "MARKETPLACE" | "OTHER";
+type SaleReturnStatus = "COMPLETED" | "CANCELLED";
+type SaleReturnTargetStockStatus = "IN_STOCK" | "SERVICE" | "DAMAGED";
 type JournalStatus = "DRAFT" | "POSTED" | "REVERSED";
 type JournalSourceModule =
   | "RECEIPT"
@@ -627,6 +629,44 @@ export type Database = {
           description: string;
           amount: number;
           payment_account_id?: string | null;
+        }
+      >;
+      sale_returns: Table<
+        BaseTransactionRow & {
+          return_number: string;
+          sale_id: string;
+          return_date: string;
+          status: SaleReturnStatus;
+          target_stock_status: SaleReturnTargetStockStatus;
+          return_reason_code: string | null;
+          return_notes: string | null;
+          refund_amount: number;
+          refund_account_id: string | null;
+          refund_reference: string | null;
+          refund_proof_url: string | null;
+          refund_proof_filename: string | null;
+          refund_recorded_at: string | null;
+          reversed_sale_journal_entry_id: string | null;
+          journal_entry_id: string | null;
+          completed_at: string | null;
+        },
+        BaseTransactionInsert & {
+          return_number: string;
+          sale_id: string;
+          return_date: string;
+          status?: SaleReturnStatus;
+          target_stock_status: SaleReturnTargetStockStatus;
+          return_reason_code?: string | null;
+          return_notes?: string | null;
+          refund_amount?: number;
+          refund_account_id?: string | null;
+          refund_reference?: string | null;
+          refund_proof_url?: string | null;
+          refund_proof_filename?: string | null;
+          refund_recorded_at?: string | null;
+          reversed_sale_journal_entry_id?: string | null;
+          journal_entry_id?: string | null;
+          completed_at?: string | null;
         }
       >;
       journal_entries: Table<

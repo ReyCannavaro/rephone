@@ -25,6 +25,7 @@ type CreateJournalInput = {
   lines: CreateJournalLineInput[];
   journal_number?: string;
   notes?: string | null;
+  reversed_entry_id?: string | null;
 };
 
 export type JournalServiceResult<T> =
@@ -70,6 +71,7 @@ export async function createPostedJournal(
     total_debit: totalDebit,
     total_credit: totalCredit,
     posted_at: now,
+    reversed_entry_id: input.reversed_entry_id ?? null,
     notes: input.notes ?? null,
   };
 

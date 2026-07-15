@@ -9,9 +9,11 @@ import {
 
 export const sellableStockStatuses = ["IN_STOCK", "RESERVED"] as const;
 export const salePaymentMethods = ["CASH", "TRANSFER", "MARKETPLACE", "OTHER"] as const;
+export const saleReturnTargetStockStatuses = ["IN_STOCK", "SERVICE", "DAMAGED"] as const;
 
 export type SellableStockStatus = (typeof sellableStockStatuses)[number];
 export type SalePaymentMethod = (typeof salePaymentMethods)[number];
+export type SaleReturnTargetStockStatus = (typeof saleReturnTargetStockStatuses)[number];
 
 export type SaleCostInput = {
   cost_category_id: string;
@@ -134,6 +136,10 @@ export function buildSaleWarnings(input: {
 
 export function generateSaleNumber(date = new Date()) {
   return `SAL-${formatCompactDate(date)}-${formatCompactTime(date)}`;
+}
+
+export function generateSaleReturnNumber(date = new Date()) {
+  return `SRT-${formatCompactDate(date)}-${formatCompactTime(date)}`;
 }
 
 export function roundMoney(value: number) {

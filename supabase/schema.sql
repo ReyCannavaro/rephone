@@ -553,6 +553,51 @@ create table if not exists public.sale_costs (
   constraint sale_costs_amount_positive check (amount > 0)
 );
 
+create table if not exists public.sale_returns (
+  id uuid primary key default gen_random_uuid(),
+  return_number varchar(40) not null unique,
+  sale_id uuid not null references public.sales(id),
+  return_date date not null,
+  status varchar(20) not null default 'COMPLETED',
+  target_stock_status varchar(20) not null,
+  return_reason_code varchar(50),
+  return_notes text,
+  refund_amount numeric(18,2) not null default 0,
+  refund_account_id uuid references public.accounts(id),
+  refund_reference varchar(100),
+  refund_proof_url text,
+  refund_proof_filename varchar(255),
+  refund_recorded_at timestamptz,
+  reversed_sale_journal_entry_id uuid,
+  journal_entry_id uuid,
+  completed_at timestamptz,
+  notes text,
+  created_by uuid,
+  updated_by uuid,
+  deleted_at timestamptz,
+  version integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint sale_returns_status_allowed check (
+    status in ('COMPLETED', 'CANCELLED')
+  ),
+  constraint sale_returns_target_stock_status_allowed check (
+    target_stock_status in ('IN_STOCK', 'SERVICE', 'DAMAGED')
+  ),
+  constraint sale_returns_refund_amount_non_negative check (refund_amount >= 0),
+  constraint sale_returns_refund_required_when_amount_positive check (
+    refund_amount = 0
+    or (
+      refund_account_id is not null
+      and refund_reference is not null
+      and refund_proof_url is not null
+    )
+  ),
+  constraint sale_returns_refund_proof_url_https check (
+    refund_proof_url is null or refund_proof_url ~ '^https://'
+  )
+);
+
 create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   journal_number varchar(40) not null unique,
@@ -647,12 +692,13 @@ create index if not exists sales_sales_channel_id_idx on public.sales(sales_chan
 create index if not exists sales_status_idx on public.sales(status);
 create index if not exists sale_items_sale_id_idx on public.sale_items(sale_id);
 create index if not exists sale_items_phone_unit_id_idx on public.sale_items(phone_unit_id);
-create unique index if not exists sale_items_active_phone_unit_unique_idx
-on public.sale_items(phone_unit_id)
-where deleted_at is null;
+drop index if exists sale_items_active_phone_unit_unique_idx;
 create index if not exists sale_costs_sale_id_idx on public.sale_costs(sale_id);
 create index if not exists sale_costs_sale_item_id_idx on public.sale_costs(sale_item_id);
 create index if not exists sale_costs_cost_category_id_idx on public.sale_costs(cost_category_id);
+create index if not exists sale_returns_sale_id_idx on public.sale_returns(sale_id);
+create index if not exists sale_returns_return_date_idx on public.sale_returns(return_date);
+create index if not exists sale_returns_target_stock_status_idx on public.sale_returns(target_stock_status);
 create index if not exists journal_entries_transaction_date_idx on public.journal_entries(transaction_date);
 create index if not exists journal_entries_source_idx on public.journal_entries(source_module, source_id);
 create index if not exists journal_entries_status_idx on public.journal_entries(status);
@@ -705,6 +751,30 @@ begin
   ) then
     alter table public.sales
       add constraint sales_journal_entry_id_fkey
+      foreign key (journal_entry_id) references public.journal_entries(id);
+  end if;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sale_returns_reversed_sale_journal_entry_id_fkey'
+  ) then
+    alter table public.sale_returns
+      add constraint sale_returns_reversed_sale_journal_entry_id_fkey
+      foreign key (reversed_sale_journal_entry_id) references public.journal_entries(id);
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'sale_returns_journal_entry_id_fkey'
+  ) then
+    alter table public.sale_returns
+      add constraint sale_returns_journal_entry_id_fkey
       foreign key (journal_entry_id) references public.journal_entries(id);
   end if;
 end;
@@ -802,6 +872,10 @@ create or replace trigger sale_costs_set_updated_at
 before update on public.sale_costs
 for each row execute function public.set_updated_at();
 
+create or replace trigger sale_returns_set_updated_at
+before update on public.sale_returns
+for each row execute function public.set_updated_at();
+
 create or replace trigger journal_entries_set_updated_at
 before update on public.journal_entries
 for each row execute function public.set_updated_at();
@@ -833,6 +907,7 @@ alter table public.unit_price_histories enable row level security;
 alter table public.sales enable row level security;
 alter table public.sale_items enable row level security;
 alter table public.sale_costs enable row level security;
+alter table public.sale_returns enable row level security;
 alter table public.journal_entries enable row level security;
 alter table public.journal_lines enable row level security;
 
@@ -904,6 +979,9 @@ create policy "Sale items are readable" on public.sale_items for select using (d
 
 drop policy if exists "Sale costs are readable" on public.sale_costs;
 create policy "Sale costs are readable" on public.sale_costs for select using (deleted_at is null);
+
+drop policy if exists "Sale returns are readable" on public.sale_returns;
+create policy "Sale returns are readable" on public.sale_returns for select using (deleted_at is null);
 
 drop policy if exists "Journal entries are readable" on public.journal_entries;
 create policy "Journal entries are readable" on public.journal_entries for select using (deleted_at is null);

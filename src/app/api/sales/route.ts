@@ -133,6 +133,40 @@ export async function POST(request: Request) {
     );
   }
 
+  const activeSaleItemsResult = await supabase
+    .from("sale_items")
+    .select("sale_id")
+    .eq("phone_unit_id", phoneUnitId)
+    .is("deleted_at", null);
+
+  if (activeSaleItemsResult.error) {
+    return apiError("ACTIVE_SALE_LOOKUP_FAILED", activeSaleItemsResult.error.message, 500);
+  }
+
+  const activeSaleIds = [...new Set((activeSaleItemsResult.data ?? []).map((item) => item.sale_id))];
+
+  if (activeSaleIds.length > 0) {
+    const activeSalesResult = await supabase
+      .from("sales")
+      .select("id, sale_number, status")
+      .in("id", activeSaleIds)
+      .in("status", ["DRAFT", "COMPLETED"])
+      .is("deleted_at", null);
+
+    if (activeSalesResult.error) {
+      return apiError("ACTIVE_SALE_LOOKUP_FAILED", activeSalesResult.error.message, 500);
+    }
+
+    if ((activeSalesResult.data ?? []).length > 0) {
+      return apiError(
+        "UNIT_ALREADY_IN_ACTIVE_SALE",
+        "Unit already belongs to an active draft or completed sale.",
+        409,
+        activeSalesResult.data[0],
+      );
+    }
+  }
+
   const costCategoryIds = [...new Set(costs.map((cost) => cost.cost_category_id))];
 
   if (costCategoryIds.length > 0) {
