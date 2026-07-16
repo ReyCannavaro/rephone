@@ -1,4 +1,5 @@
 import { ModulePage } from "@/components/dashboard/module-page";
+import { ReportsWorkspace } from "@/components/reports/reports-workspace";
 
 export default function ReportsPage() {
   return (
@@ -6,6 +7,8 @@ export default function ReportsPage() {
       description="Akses dashboard, laporan inventory, profit unit, laba rugi, neraca, dan arus kas."
       eyebrow="Analitik"
       title="Laporan"
-    />
+    >
+      <ReportsWorkspace />
+    </ModulePage>
   );
 }
