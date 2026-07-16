@@ -5,10 +5,12 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { SelectField, TextAreaField, TextInput } from "@/components/ui/form-field";
 import { Modal } from "@/components/ui/modal";
 import { ErrorState, LoadingState } from "@/components/ui/state-view";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { useToast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api/client";
 import { formatRupiah } from "@/lib/format/currency";
 import type {
@@ -58,6 +60,7 @@ const inspectionStatusOptions = [
 ];
 
 export function ReceiptDetail({ id }: ReceiptDetailProps) {
+  const { showToast } = useToast();
   const [detail, setDetail] = useState<ReceiptDetailData | null>(null);
   const [references, setReferences] = useState<DetailReferences | null>(null);
   const [inspectionDrafts, setInspectionDrafts] = useState<Record<string, InspectionDraft>>({});
@@ -72,6 +75,8 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
     rejection_notes: "",
   });
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [acceptConfirmOpen, setAcceptConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingInspection, setSavingInspection] = useState(false);
   const [savingAction, setSavingAction] = useState(false);
@@ -211,16 +216,23 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
       });
 
       setNotice("Checklist inspeksi tersimpan.");
+      showToast({ title: "Checklist tersimpan", message: "Hasil inspeksi unit sudah diperbarui." });
       setReloadKey((value) => value + 1);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Checklist gagal disimpan.");
+      const message = saveError instanceof Error ? saveError.message : "Checklist gagal disimpan.";
+      setError(message);
+      showToast({ title: "Checklist gagal disimpan", message, variant: "error" });
     } finally {
       setSavingInspection(false);
     }
   }
 
-  async function acceptReceipt(event: FormEvent<HTMLFormElement>) {
+  function requestAcceptReceipt(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setAcceptConfirmOpen(true);
+  }
+
+  async function acceptReceipt() {
     setSavingAction(true);
     setError("");
     setNotice("");
@@ -235,13 +247,31 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
         }),
         method: "POST",
       });
+      setAcceptConfirmOpen(false);
       setNotice("Receipt berhasil di-accept.");
+      showToast({
+        title: "Receipt di-accept",
+        message: "Unit masuk stok dan jurnal pembelian sudah dibuat.",
+      });
       setReloadKey((value) => value + 1);
     } catch (acceptError) {
-      setError(acceptError instanceof Error ? acceptError.message : "Receipt gagal di-accept.");
+      const message = acceptError instanceof Error ? acceptError.message : "Receipt gagal di-accept.";
+      setError(message);
+      showToast({ title: "Receipt gagal di-accept", message, variant: "error" });
     } finally {
       setSavingAction(false);
     }
+  }
+
+  function requestRejectReceipt() {
+    if (!rejectForm.rejection_notes.trim()) {
+      const message = "Catatan reject wajib diisi.";
+      setError(message);
+      showToast({ title: "Reject belum bisa diproses", message, variant: "error" });
+      return;
+    }
+
+    setRejectConfirmOpen(true);
   }
 
   async function rejectReceipt() {
@@ -254,11 +284,18 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
         body: JSON.stringify(rejectForm),
         method: "POST",
       });
+      setRejectConfirmOpen(false);
       setRejectOpen(false);
       setNotice("Receipt berhasil di-reject.");
+      showToast({
+        title: "Receipt di-reject",
+        message: "Status receipt dan unit sudah diperbarui.",
+      });
       setReloadKey((value) => value + 1);
     } catch (rejectError) {
-      setError(rejectError instanceof Error ? rejectError.message : "Receipt gagal di-reject.");
+      const message = rejectError instanceof Error ? rejectError.message : "Receipt gagal di-reject.";
+      setError(message);
+      showToast({ title: "Receipt gagal di-reject", message, variant: "error" });
     } finally {
       setSavingAction(false);
     }
@@ -456,7 +493,7 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
         ))}
       </form>
 
-      <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={acceptReceipt}>
+      <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={requestAcceptReceipt}>
         <div>
           <p className="text-sm font-medium uppercase text-stone-500">Keputusan</p>
           <h3 className="text-lg font-semibold text-stone-950">Accept / Reject</h3>
@@ -530,7 +567,7 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
             <Button onClick={() => setRejectOpen(false)} variant="secondary">
               Batal
             </Button>
-            <Button disabled={savingAction} onClick={rejectReceipt} variant="danger">
+            <Button disabled={savingAction} onClick={requestRejectReceipt} variant="danger">
               {savingAction ? "Memproses..." : "Reject Receipt"}
             </Button>
           </>
@@ -561,6 +598,27 @@ export function ReceiptDetail({ id }: ReceiptDetailProps) {
           />
         </div>
       </Modal>
+
+      <ConfirmDialog
+        confirmLabel="Accept Receipt"
+        description="Aksi ini akan menerima receipt, memasukkan unit ke inventory, dan membuat jurnal pembelian. Pastikan checklist, pembayaran, dan folder foto sudah benar."
+        loading={savingAction}
+        onCancel={() => setAcceptConfirmOpen(false)}
+        onConfirm={acceptReceipt}
+        open={acceptConfirmOpen}
+        title="Accept receipt ini?"
+      />
+
+      <ConfirmDialog
+        confirmLabel="Reject Receipt"
+        description="Aksi ini akan menolak receipt dan mengubah status unit menjadi REJECTED. Alasan dan catatan reject akan tersimpan di audit log."
+        loading={savingAction}
+        onCancel={() => setRejectConfirmOpen(false)}
+        onConfirm={rejectReceipt}
+        open={rejectConfirmOpen}
+        title="Reject receipt ini?"
+        variant="danger"
+      />
     </div>
   );
 }

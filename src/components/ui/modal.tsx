@@ -12,16 +12,30 @@ type ModalProps = {
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
+  width?: "default" | "wide";
 };
 
-export function Modal({ children, description, footer, onClose, open, title }: ModalProps) {
+export function Modal({
+  children,
+  description,
+  footer,
+  onClose,
+  open,
+  title,
+  width = "default",
+}: ModalProps) {
   if (!open) {
     return null;
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4">
-      <div className="w-full max-w-xl overflow-hidden rounded-md border border-stone-200 bg-white shadow-xl">
+      <div
+        className={[
+          "max-h-[calc(100vh-2rem)] w-full overflow-hidden rounded-md border border-stone-200 bg-white shadow-xl",
+          width === "wide" ? "max-w-5xl" : "max-w-xl",
+        ].join(" ")}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-stone-200 px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold text-stone-950">{title}</h2>
@@ -35,9 +49,9 @@ export function Modal({ children, description, footer, onClose, open, title }: M
             variant="ghost"
           />
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-5 py-4">{children}</div>
         {footer ? (
-          <div className="flex justify-end gap-2 border-t border-stone-200 bg-stone-50 px-5 py-4">
+          <div className="flex flex-col-reverse gap-2 border-t border-stone-200 bg-stone-50 px-5 py-4 sm:flex-row sm:justify-end">
             {footer}
           </div>
         ) : null}

@@ -9,6 +9,7 @@ import {
   Menu,
   PackageCheck,
   ReceiptText,
+  ScrollText,
   Settings2,
   UserRound,
   WalletCards,
@@ -29,6 +30,7 @@ const navigation = [
   { label: "Penjualan", href: "/sales", icon: PackageCheck },
   { label: "Keuangan", href: "/finance", icon: WalletCards },
   { label: "Laporan", href: "/reports", icon: BarChart3 },
+  { label: "Audit Log", href: "/audit-logs", icon: ScrollText },
   { label: "Master Data", href: "/master-data", icon: Settings2 },
 ];
 

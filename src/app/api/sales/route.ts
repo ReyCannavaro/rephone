@@ -24,6 +24,46 @@ export const runtime = "nodejs";
 type SaleInsert = Database["public"]["Tables"]["sales"]["Insert"];
 type SaleItemInsert = Database["public"]["Tables"]["sale_items"]["Insert"];
 type SaleCostInsert = Database["public"]["Tables"]["sale_costs"]["Insert"];
+type SaleStatus = Database["public"]["Tables"]["sales"]["Row"]["status"];
+
+const saleStatusFilters: SaleStatus[] = ["DRAFT", "COMPLETED", "CANCELLED", "RETURNED"];
+
+export async function GET(request: Request) {
+  const supabase = createSupabaseAdminClient();
+  const { searchParams } = new URL(request.url);
+  const statusParam = getOptionalString(searchParams.get("status"));
+  const status = saleStatusFilters.includes(statusParam as SaleStatus)
+    ? (statusParam as SaleStatus)
+    : null;
+  const q = getOptionalString(searchParams.get("q"));
+  const limit = Math.min(Number(searchParams.get("limit") ?? 100) || 100, 200);
+
+  let query = supabase
+    .from("sales")
+    .select(
+      "id, sale_number, sale_date, customer_id, sales_channel_id, status, payment_account_id, payment_method, payment_reference, payment_proof_url, completed_at, subtotal_amount, total_sales_cost, total_net_amount, total_cogs_amount, total_profit_amount, journal_entry_id, notes, created_at, updated_at",
+    )
+    .is("deleted_at", null)
+    .order("sale_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (status) {
+    query = query.eq("status", status);
+  }
+
+  if (q) {
+    query = query.ilike("sale_number", `%${q}%`);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    return apiError("SALES_QUERY_FAILED", error.message, 500);
+  }
+
+  return apiOk(data);
+}
 
 export async function POST(request: Request) {
   const parsed = await readJsonObject(request);

@@ -9,6 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { SelectField, TextAreaField, TextInput } from "@/components/ui/form-field";
 import { ErrorState, LoadingState } from "@/components/ui/state-view";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { useToast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api/client";
 import { formatRupiah } from "@/lib/format/currency";
 import type {
@@ -41,6 +42,7 @@ type References = {
 };
 
 export function InventoryDetail({ id }: InventoryDetailProps) {
+  const { showToast } = useToast();
   const [detail, setDetail] = useState<InventoryUnitDetailData | null>(null);
   const [refs, setRefs] = useState<References | null>(null);
   const [loading, setLoading] = useState(true);
@@ -173,6 +175,10 @@ export function InventoryDetail({ id }: InventoryDetailProps) {
         method: "POST",
       });
       setNotice("Biaya unit berhasil ditambahkan.");
+      showToast({
+        title: "Biaya unit tersimpan",
+        message: "Total modal unit dan jurnal biaya sudah diperbarui.",
+      });
       setCostForm((current) => ({
         ...current,
         description: "",
@@ -182,7 +188,9 @@ export function InventoryDetail({ id }: InventoryDetailProps) {
       }));
       setReloadKey((value) => value + 1);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Biaya gagal disimpan.");
+      const message = submitError instanceof Error ? submitError.message : "Biaya gagal disimpan.";
+      setError(message);
+      showToast({ title: "Biaya gagal disimpan", message, variant: "error" });
     } finally {
       setSavingCost(false);
     }
@@ -205,10 +213,16 @@ export function InventoryDetail({ id }: InventoryDetailProps) {
         method: "POST",
       });
       setNotice("Harga jual berhasil diperbarui.");
+      showToast({
+        title: "Harga jual diperbarui",
+        message: "Estimasi laba harga pasang dan minimal sudah dihitung ulang.",
+      });
       setPriceForm((current) => ({ ...current, reason: "", notes: "" }));
       setReloadKey((value) => value + 1);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Harga gagal disimpan.");
+      const message = submitError instanceof Error ? submitError.message : "Harga gagal disimpan.";
+      setError(message);
+      showToast({ title: "Harga gagal disimpan", message, variant: "error" });
     } finally {
       setSavingPrice(false);
     }
