@@ -1,65 +1,104 @@
-import Image from "next/image";
+import { ArrowRight, ClipboardList, PackageCheck, WalletCards } from "lucide-react";
+import Link from "next/link";
 
-export default function Home() {
+import { Button } from "@/components/ui/button";
+import { DataTable } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/state-view";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { formatRupiah } from "@/lib/format/currency";
+
+const metrics = [
+  { label: "Unit dalam stok", value: "0", helper: "Siap dijual" },
+  { label: "Penerimaan pending", value: "0", helper: "Perlu inspeksi" },
+  { label: "Penjualan bulan ini", value: formatRupiah(0), helper: "Net sales" },
+  { label: "Laba bulan ini", value: formatRupiah(0), helper: "Setelah HPP" },
+];
+
+const activityRows = [
+  {
+    id: "setup",
+    module: "Backend",
+    description: "Schema, RPC, laporan, audit log, dan hardening sudah siap.",
+    status: "POSTED",
+  },
+];
+
+export default function DashboardPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="grid gap-6">
+      <section className="flex flex-col gap-4 border-b border-stone-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-sm font-medium uppercase text-stone-500">Ringkasan bisnis</p>
+          <h2 className="mt-2 text-2xl font-semibold text-stone-950">Dashboard</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-stone-600">
+            Fondasi frontend siap untuk mengelola alur penerimaan, inventory, penjualan,
+            keuangan, dan laporan dari backend Rephone POS.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/receipts">
+            <Button icon={<ClipboardList size={16} />}>Penerimaan</Button>
+          </Link>
+          <Link href="/sales">
+            <Button icon={<PackageCheck size={16} />} variant="secondary">
+              Penjualan
+            </Button>
+          </Link>
         </div>
-      </main>
+      </section>
+
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {metrics.map((metric) => (
+          <div
+            className="rounded-md border border-stone-200 bg-white p-4"
+            key={metric.label}
+          >
+            <p className="text-sm font-medium text-stone-600">{metric.label}</p>
+            <p className="mt-3 text-2xl font-semibold text-stone-950">{metric.value}</p>
+            <p className="mt-1 text-xs text-stone-500">{metric.helper}</p>
+          </div>
+        ))}
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-[1fr_360px]">
+        <div className="grid gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-base font-semibold text-stone-950">Aktivitas terbaru</h3>
+            <Link
+              className="inline-flex items-center gap-2 text-sm font-medium text-stone-700 hover:text-stone-950"
+              href="/reports"
+            >
+              Lihat laporan
+              <ArrowRight size={15} />
+            </Link>
+          </div>
+          <DataTable
+            columns={[
+              { key: "module", header: "Modul", render: (row) => row.module },
+              { key: "description", header: "Aktivitas", render: (row) => row.description },
+              {
+                key: "status",
+                header: "Status",
+                render: (row) => <StatusBadge status={row.status} />,
+              },
+            ]}
+            getRowKey={(row) => row.id}
+            rows={activityRows}
+          />
+        </div>
+
+        <EmptyState
+          action={
+            <Link href="/finance">
+              <Button icon={<WalletCards size={16} />} variant="secondary">
+                Buka Keuangan
+              </Button>
+            </Link>
+          }
+          description="Setelah transaksi pertama masuk, panel ini bisa diisi notifikasi saldo, unit butuh harga, atau retur yang perlu dicek."
+          title="Belum ada pekerjaan tertunda"
+        />
+      </section>
     </div>
   );
 }
