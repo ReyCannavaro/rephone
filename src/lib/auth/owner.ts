@@ -1,29 +1,15 @@
 import type { User } from "@supabase/supabase-js";
 
 import { apiError } from "@/lib/api/responses";
+import { getUserRole, ownerRole } from "@/lib/auth/roles";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-export const ownerRole = "OWNER";
+export { getUserRole, isOwner, ownerRole } from "@/lib/auth/roles";
 
 export type OwnerSession = {
   user: User;
   role: string;
 };
-
-export function getUserRole(user: User | null) {
-  if (!user) {
-    return null;
-  }
-
-  const appRole = readRole(user.app_metadata?.role);
-  const userRole = readRole(user.user_metadata?.role);
-
-  return appRole ?? userRole;
-}
-
-export function isOwner(user: User | null) {
-  return getUserRole(user) === ownerRole;
-}
 
 export async function getOwnerSession(): Promise<
   | { data: OwnerSession; error?: undefined }
@@ -50,8 +36,4 @@ export async function getOwnerSession(): Promise<
   }
 
   return { data: { user, role } };
-}
-
-function readRole(value: unknown) {
-  return typeof value === "string" ? value.toUpperCase() : null;
 }

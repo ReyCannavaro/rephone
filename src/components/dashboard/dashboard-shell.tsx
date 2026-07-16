@@ -5,19 +5,22 @@ import {
   Boxes,
   ClipboardList,
   LayoutDashboard,
+  LogOut,
   Menu,
   PackageCheck,
   ReceiptText,
   Settings2,
+  UserRound,
   WalletCards,
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
 const navigation = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
@@ -33,8 +36,61 @@ type DashboardShellProps = {
   children: ReactNode;
 };
 
+type AuthMeResponse = {
+  ok: boolean;
+  data?: {
+    authenticated: boolean;
+    owner: boolean;
+    role: string | null;
+    user: {
+      email?: string;
+    } | null;
+  };
+};
+
 export function DashboardShell({ children }: DashboardShellProps) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  useEffect(() => {
+    if (pathname.startsWith("/login")) {
+      return;
+    }
+
+    let mounted = true;
+
+    async function loadSession() {
+      const response = await fetch("/api/auth/me", { cache: "no-store" });
+      const payload = (await response.json()) as AuthMeResponse;
+
+      if (!mounted) {
+        return;
+      }
+
+      setUserEmail(payload.data?.user?.email ?? null);
+    }
+
+    loadSession().catch(() => setUserEmail(null));
+
+    return () => {
+      mounted = false;
+    };
+  }, [pathname]);
+
+  if (pathname.startsWith("/login")) {
+    return children;
+  }
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
+  }
 
   return (
     <div className="min-h-screen bg-stone-100 text-stone-950">
@@ -96,9 +152,23 @@ export function DashboardShell({ children }: DashboardShellProps) {
               <h1 className="text-base font-semibold text-stone-950">Rephone POS</h1>
             </div>
           </div>
-          <div className="hidden items-center gap-2 text-sm text-stone-600 sm:flex">
-            <span className="size-2 rounded-full bg-emerald-500" />
-            Backend ready
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-600 sm:flex">
+              <UserRound size={15} />
+              <span className="max-w-48 truncate">{userEmail ?? "OWNER"}</span>
+            </div>
+            <Button
+              aria-label="Logout"
+              className="size-9 px-0 sm:w-auto sm:px-3"
+              disabled={loggingOut}
+              icon={<LogOut size={16} />}
+              onClick={handleLogout}
+              variant="secondary"
+            >
+              <span className="hidden sm:inline">
+                {loggingOut ? "Keluar..." : "Logout"}
+              </span>
+            </Button>
           </div>
         </header>
         <main className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">{children}</main>
