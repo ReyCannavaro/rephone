@@ -6,6 +6,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SelectField, TextAreaField, TextInput } from "@/components/ui/form-field";
 import { ErrorState, LoadingState } from "@/components/ui/state-view";
+import { useToast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api/client";
 import { formatRupiah } from "@/lib/format/currency";
 import type {
@@ -30,6 +31,7 @@ const adjustmentTypeOptions = [
 ];
 
 export function FinanceWorkspace() {
+  const { showToast } = useToast();
   const today = new Date().toISOString().slice(0, 10);
   const [activeTab, setActiveTab] = useState<TabId>("capital");
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
@@ -184,9 +186,16 @@ export function FinanceWorkspace() {
         method: "POST",
       });
       setNotice(success);
+      showToast({
+        title: "Transaksi tersimpan",
+        message: success,
+      });
       setReloadKey((value) => value + 1);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Transaksi gagal disimpan.");
+      const message =
+        submitError instanceof Error ? submitError.message : "Transaksi gagal disimpan.";
+      setError(message);
+      showToast({ title: "Transaksi gagal disimpan", message, variant: "error" });
     } finally {
       setSaving(false);
     }

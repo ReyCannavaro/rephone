@@ -5,10 +5,12 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { DataTable } from "@/components/ui/data-table";
 import { SelectField, TextAreaField, TextInput } from "@/components/ui/form-field";
 import { ErrorState, LoadingState } from "@/components/ui/state-view";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { useToast } from "@/components/ui/toast";
 import { fetchApi } from "@/lib/api/client";
 import { formatRupiah } from "@/lib/format/currency";
 import type { AccountOption, CostCategoryOption } from "@/lib/inventory/inventory-ui-types";
@@ -47,6 +49,7 @@ const returnTargetOptions = [
 ];
 
 export function SaleDetail({ id }: SaleDetailProps) {
+  const { showToast } = useToast();
   const [detail, setDetail] = useState<SaleDetailData | null>(null);
   const [refs, setRefs] = useState<References | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +58,8 @@ export function SaleDetail({ id }: SaleDetailProps) {
   const [reloadKey, setReloadKey] = useState(0);
   const [savingComplete, setSavingComplete] = useState(false);
   const [savingReturn, setSavingReturn] = useState(false);
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [returnConfirmOpen, setReturnConfirmOpen] = useState(false);
   const [completeForm, setCompleteForm] = useState({
     payment_account_id: "",
     payment_method: "TRANSFER",
@@ -153,8 +158,12 @@ export function SaleDetail({ id }: SaleDetailProps) {
     detail.returns.length === 0 &&
     detail.units.every((unit) => unit.stock_status === "SOLD");
 
-  async function completeSale(event: FormEvent<HTMLFormElement>) {
+  function requestCompleteSale(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setCompleteConfirmOpen(true);
+  }
+
+  async function completeSale() {
     setSavingComplete(true);
     setError("");
     setNotice("");
@@ -164,17 +173,28 @@ export function SaleDetail({ id }: SaleDetailProps) {
         body: JSON.stringify(completeForm),
         method: "POST",
       });
+      setCompleteConfirmOpen(false);
       setNotice("Sale berhasil di-complete.");
+      showToast({
+        title: "Sale selesai",
+        message: "Status unit berubah SOLD dan jurnal penjualan/HPP sudah dibuat.",
+      });
       setReloadKey((value) => value + 1);
     } catch (completeError) {
-      setError(completeError instanceof Error ? completeError.message : "Sale gagal di-complete.");
+      const message = completeError instanceof Error ? completeError.message : "Sale gagal di-complete.";
+      setError(message);
+      showToast({ title: "Sale gagal diselesaikan", message, variant: "error" });
     } finally {
       setSavingComplete(false);
     }
   }
 
-  async function returnSale(event: FormEvent<HTMLFormElement>) {
+  function requestReturnSale(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setReturnConfirmOpen(true);
+  }
+
+  async function returnSale() {
     setSavingReturn(true);
     setError("");
     setNotice("");
@@ -194,10 +214,18 @@ export function SaleDetail({ id }: SaleDetailProps) {
         }),
         method: "POST",
       });
+      setReturnConfirmOpen(false);
       setNotice("Retur penjualan berhasil diproses.");
+      showToast({
+        title: "Retur diproses",
+        message: "Jurnal reversal dibuat dan status unit sudah dikembalikan.",
+      });
       setReloadKey((value) => value + 1);
     } catch (returnError) {
-      setError(returnError instanceof Error ? returnError.message : "Retur penjualan gagal diproses.");
+      const message =
+        returnError instanceof Error ? returnError.message : "Retur penjualan gagal diproses.";
+      setError(message);
+      showToast({ title: "Retur gagal diproses", message, variant: "error" });
     } finally {
       setSavingReturn(false);
     }
@@ -332,7 +360,7 @@ export function SaleDetail({ id }: SaleDetailProps) {
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
-        <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={completeSale}>
+        <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={requestCompleteSale}>
           <div>
             <p className="text-sm font-medium uppercase text-stone-500">Complete Sale</p>
             <h3 className="text-lg font-semibold text-stone-950">Konfirmasi Pembayaran</h3>
@@ -383,7 +411,7 @@ export function SaleDetail({ id }: SaleDetailProps) {
           </Button>
         </form>
 
-        <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={returnSale}>
+        <form className="grid gap-4 rounded-md border border-stone-200 bg-white p-5" onSubmit={requestReturnSale}>
           <div>
             <p className="text-sm font-medium uppercase text-stone-500">Retur Penjualan</p>
             <h3 className="text-lg font-semibold text-stone-950">Proses Retur</h3>
@@ -478,6 +506,27 @@ export function SaleDetail({ id }: SaleDetailProps) {
           </Button>
         </form>
       </section>
+
+      <ConfirmDialog
+        confirmLabel="Complete Sale"
+        description="Aksi ini akan menyelesaikan sale, mengubah unit menjadi SOLD, menghitung laba, dan membuat jurnal penjualan serta HPP."
+        loading={savingComplete}
+        onCancel={() => setCompleteConfirmOpen(false)}
+        onConfirm={completeSale}
+        open={completeConfirmOpen}
+        title="Complete sale ini?"
+      />
+
+      <ConfirmDialog
+        confirmLabel="Proses Retur"
+        description="Aksi ini akan membalik jurnal penjualan, membuat refund bila ada, dan mengembalikan unit ke status stok yang dipilih."
+        loading={savingReturn}
+        onCancel={() => setReturnConfirmOpen(false)}
+        onConfirm={returnSale}
+        open={returnConfirmOpen}
+        title="Proses retur sale ini?"
+        variant="danger"
+      />
     </div>
   );
 }

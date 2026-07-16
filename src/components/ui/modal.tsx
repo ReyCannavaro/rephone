@@ -32,7 +32,7 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/40 p-4">
       <div
         className={[
-          "w-full overflow-hidden rounded-md border border-stone-200 bg-white shadow-xl",
+          "max-h-[calc(100vh-2rem)] w-full overflow-hidden rounded-md border border-stone-200 bg-white shadow-xl",
           width === "wide" ? "max-w-5xl" : "max-w-xl",
         ].join(" ")}
       >
@@ -49,9 +49,9 @@ export function Modal({
             variant="ghost"
           />
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-5 py-4">{children}</div>
         {footer ? (
-          <div className="flex justify-end gap-2 border-t border-stone-200 bg-stone-50 px-5 py-4">
+          <div className="flex flex-col-reverse gap-2 border-t border-stone-200 bg-stone-50 px-5 py-4 sm:flex-row sm:justify-end">
             {footer}
           </div>
         ) : null}
